@@ -1,8 +1,5 @@
 {
   "name": "autodev-marketplace",
-  "metadata": {
-    "description": "Autodev — automated development workflow orchestrator for Claude Code"
-  },
   "owner": {
     "name": "Justin Vu",
     "email": "vunh2301@gmail.com"
@@ -10,26 +7,10 @@
   "plugins": [
     {
       "name": "autodev",
-      "source": "./plugins/autodev",
-      "description": "Automated development workflow orchestrator. Runs spec → plan → implement → PR → review pipeline with parallel tasks, cross-model review, budget tracking, and caching.",
-      "version": "2.1.0",
-      "author": {
-        "name": "Justin Vu",
-        "email": "vunh2301@gmail.com"
-      },
+      "description": "Automated development workflow orchestrator with parallel tasks, cross-model review, budget tracking, and caching.",
       "category": "workflow",
-      "homepage": "https://github.com/vunh2301/autodev-plugin",
-      "keywords": [
-        "workflow",
-        "automation",
-        "orchestrator",
-        "spec",
-        "plan",
-        "implement",
-        "review",
-        "parallel",
-        "cross-model"
-      ]
+      "source": "./plugins/autodev",
+      "homepage": "https://github.com/vunh2301/autodev-plugin"
     }
   ]
 }
