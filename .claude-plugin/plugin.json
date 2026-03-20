@@ -1,0 +1,39 @@
+{
+  "name": "autodev",
+  "description": "Automated development workflow orchestrator. Runs spec → plan → implement → PR → review pipeline with parallel task execution, cross-model review, budget tracking, and incremental caching.",
+  "version": "2.1.0",
+  "author": {
+    "name": "Justin Vu",
+    "email": "vunh2301@gmail.com"
+  },
+  "keywords": [
+    "workflow",
+    "automation",
+    "orchestrator",
+    "spec",
+    "plan",
+    "implement",
+    "review",
+    "parallel",
+    "cross-model"
+  ],
+  "commands": "./commands/",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow-detect.mjs\""
+          }
+        ]
+      }
+    ]
+  },
+  "settings": {
+    "env": {
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    }
+  }
+}

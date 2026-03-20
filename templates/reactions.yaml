@@ -1,0 +1,104 @@
+# .workflow/reactions.yaml — Autodev Workflow Configuration
+# Copy this file to your project's .workflow/ directory and customize.
+# Run: node <plugin-path>/scripts/init.mjs
+
+# === Project Settings ===
+project:
+  name: "my-project"              # Project name (used in logs, emails, teammate prompts)
+  language: "en"                   # Output language: "en", "vi", "ja", "zh", etc.
+  specs_dir: "docs/specs"          # Where design specs are written
+  plans_dir: "docs/plans"          # Where implementation plans are written
+  test_command: "npm test"         # Command to run tests
+
+# === Notifications ===
+notifications:
+  email: null                      # Email for notifications (null = disabled)
+  smtp_host: "smtp.gmail.com"      # SMTP server
+  smtp_port: 587                   # SMTP port
+
+# === Reactions ===
+reactions:
+  ci-failed:
+    auto: true
+    action: send-to-agent
+    retries: 2
+
+  changes-requested:
+    action: auto-implement
+    max_retries: 3
+    escalate_after: 3
+
+  approved-and-green:
+    action: auto-merge
+    require_human_approval: false
+
+  test-failed:
+    action: auto-fix-tests
+    max_retries: 2
+    escalate_after: 2
+
+# === Agents ===
+agents:
+  default: claude
+  role_mapping:
+    spec-writer: default
+    spec-reviewer: default
+    plan-writer: default
+    plan-reviewer: default
+    implementer: default
+    code-reviewer: default
+    reflect: claude-haiku
+
+# === Cross-Model Review (v2.1, optional) ===
+cross_model:
+  enabled: false                    # Set true to enable cross-model review
+  enforce: false                    # true = require different models for writer/reviewer
+
+  role_mapping:
+    writer: "claude-opus-4"
+    reviewer: "gpt-4o"
+    escalation: "gemini-2.5-pro"
+
+  # review_pairs:                   # Optional — override per phase
+  #   spec_review:
+  #     writer: "claude-opus-4"
+  #     reviewer: "gpt-4o"
+  #   code_review:
+  #     writer: "claude-opus-4"
+  #     reviewer: "claude-sonnet-4"
+
+  escalation:
+    enabled: false
+    model: "gemini-2.5-pro"
+    trigger:
+      type: "disagreement"          # "disagreement" | "complexity" | "always" | "never"
+      phases: ["code_review"]
+      complexity_threshold: 3
+
+  consensus:
+    enabled: false
+    min_approvals: 2
+    strategy: "reviewer_wins"
+    on_disagreement: "escalate"     # "escalate" | "reject" | "majority"
+
+# === Budget Capping (v2.1, optional) ===
+budget:
+  task_budget_tokens: null          # Max tokens per task (null = unlimited)
+  workflow_budget_tokens: null      # Max tokens per workflow (null = unlimited)
+  warn_at_pct: 80                   # Warn at N% of limit
+  chars_per_token: 4                # Heuristic for token estimation
+
+# === Incremental Cache (v2.1, optional) ===
+cache:
+  enabled: true                     # Master switch
+  ttl_days: 7                       # Cache entry TTL
+  max_entries: 100                  # Max entries (LRU eviction when exceeded)
+  auto_invalidate_on_git: true      # Auto-invalidate on git changes
+  log_cache_events: true            # Log cache hit/miss/invalidate
+  eviction_pct: 20                  # % of oldest entries to evict on LRU
+  relevant_paths_strategy: "auto"   # "auto" | "manual" | "none"
+
+# === Timeouts ===
+timeouts:
+  task_timeout_min: 60              # Per-task timeout (minutes)
+  workflow_timeout_min: 180         # Per-workflow timeout (minutes)
