@@ -149,6 +149,20 @@ docs/specs/                   # Design specs (committed)
 docs/plans/                   # Implementation plans (committed)
 ```
 
+## Update
+
+```bash
+# Step 1: Pull latest marketplace data
+claude plugin marketplace update autodev-marketplace
+
+# Step 2: Update the plugin
+claude plugin update autodev
+
+# Step 3: Restart Claude Code to apply
+```
+
+Your `.workflow/reactions.yaml` config is **never overwritten** by updates — only plugin commands/hooks change.
+
 ## Requirements
 
 - Claude Code CLI
