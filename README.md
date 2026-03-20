@@ -18,10 +18,10 @@ A Claude Code plugin that orchestrates the full development pipeline: **spec →
 
 ```bash
 # From GitHub (recommended)
-claude plugin add <your-github-user>/autodev-plugin
+claude plugin add vunh2301/autodev-plugin
 
 # Or clone locally
-git clone <repo-url> ~/.claude/plugins/local/autodev-plugin
+git clone https://github.com/vunh2301/autodev-plugin.git ~/.claude/plugins/local/autodev-plugin
 ```
 
 ### 2. Initialize in your project
