@@ -17,11 +17,19 @@ A Claude Code plugin that orchestrates the full development pipeline: **spec →
 ### 1. Install the plugin
 
 ```bash
-# From GitHub (recommended)
-claude plugin add vunh2301/autodev-plugin
+# Step 1: Add the marketplace (one-time)
+claude plugin marketplace add vunh2301/autodev-plugin
 
-# Or clone locally
+# Step 2: Install
+claude plugin install autodev
+```
+
+**Alternative — load directly (no install):**
+
+```bash
+# Clone and use --plugin-dir flag
 git clone https://github.com/vunh2301/autodev-plugin.git ~/.claude/plugins/local/autodev-plugin
+claude --plugin-dir ~/.claude/plugins/local/autodev-plugin
 ```
 
 ### 2. Initialize in your project
