@@ -1023,13 +1023,19 @@ gh pr view {pr_number} --json comments,reviews
 
 Send email at important events using `node -e` inline:
 
+Read SMTP settings from `notifications` section in `.workflow/reactions.yaml`:
+- `smtp_host` (default: smtp.gmail.com)
+- `smtp_port` (default: 587)
+- `smtp_secure` (default: false — set true for port 465)
+- Credentials from env vars: `SMTP_USER`, `SMTP_PASS`
+
 ```bash
 node --input-type=module -e "
 import { createTransport } from 'nodemailer';
 const transporter = createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false,
+  host: process.env.SMTP_HOST || '{notifications.smtp_host}',
+  port: parseInt(process.env.SMTP_PORT || '{notifications.smtp_port}'),
+  secure: {notifications.smtp_secure},
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
 });
 try {

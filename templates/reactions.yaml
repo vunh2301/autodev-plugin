@@ -11,10 +11,13 @@ project:
   test_command: "npm test"         # Command to run tests
 
 # === Notifications ===
+# Credentials via env vars: SMTP_USER, SMTP_PASS (never store in this file)
+# Gmail: use App Password (https://myaccount.google.com/apppasswords)
 notifications:
   email: null                      # Email for notifications (null = disabled)
   smtp_host: "smtp.gmail.com"      # SMTP server
-  smtp_port: 587                   # SMTP port
+  smtp_port: 587                   # 587 (STARTTLS) or 465 (SSL)
+  smtp_secure: false               # true for port 465
 
 # === Reactions ===
 reactions:
