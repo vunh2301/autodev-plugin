@@ -155,11 +155,14 @@ docs/plans/                   # Implementation plans (committed)
 # Step 1: Pull latest marketplace data
 claude plugin marketplace update autodev-marketplace
 
-# Step 2: Update the plugin
-claude plugin update autodev
+# Step 2: Reinstall to get new version
+claude plugin uninstall autodev
+claude plugin install autodev
 
 # Step 3: Restart Claude Code to apply
 ```
+
+> **Note:** `claude plugin update autodev` currently has a bug with marketplace-sourced plugins. Use uninstall + install instead.
 
 Your `.workflow/reactions.yaml` config is **never overwritten** by updates — only plugin commands/hooks change.
 
