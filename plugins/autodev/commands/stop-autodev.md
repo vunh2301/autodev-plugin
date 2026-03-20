@@ -39,9 +39,9 @@ description: "Stop a running workflow. Usage: /stop-autodev (all), /stop-autodev
 5. **Output**
 
 ```
-STOP-AUTODEV
+🟣 ▸ [{time}] STOP-AUTODEV
 
-{wf_id}/{slug}
+🔵 ▸ [{time}] {wf_id}/{slug}
   ⏸ Stopped — {N} tasks paused
   Task 1 ({slug}): {phase} (loop {count}/{max})
   Task 2 ({slug}): {status}
@@ -49,10 +49,10 @@ STOP-AUTODEV
 
 ─────────────────────────────────
 
-Use /resume-autodev to continue.
+🟢 ▸ Use /resume-autodev to continue.
 ```
 
 ## Notes
 
-- If workflow already paused → skip, output: `{wf_id} already paused.`
+- If workflow already paused → skip, output: `🟡 ▸ {wf_id} already paused.`
 - This skill does NOT invoke the orchestrator after stopping
