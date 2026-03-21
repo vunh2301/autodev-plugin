@@ -1,6 +1,7 @@
 ---
 name: autodev-cancel
 description: "Huỷ workflow hoặc task. Hỗ trợ: /autodev-cancel (tất cả, cần xác nhận), /autodev-cancel wf_001, /autodev-cancel wf_001:task_01"
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 **⚠ Output language is determined by project.language in reactions.yaml.**

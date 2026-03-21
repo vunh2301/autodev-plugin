@@ -17,27 +17,6 @@
     "parallel",
     "cross-model"
   ],
-  "commands": "./commands/",
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow-detect.mjs\""
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-cleanup.mjs\""
-          }
-        ]
-      }
-    ]
-  },
-  "settings": {
-    "env": {
-      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-    }
-  }
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json"
 }

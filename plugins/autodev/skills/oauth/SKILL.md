@@ -1,3 +1,8 @@
+---
+name: oauth
+description: "OAuth management for OpenAI cross-model dispatch — login, logout, multi-account, token management"
+---
+
 # OAuth Management
 
 Quan ly OAuth cho OpenAI (Codex) — login, logout, multi-account, token management.
