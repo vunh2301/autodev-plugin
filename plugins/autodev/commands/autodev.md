@@ -1169,14 +1169,16 @@ CHO MỖI parallel group (tuần tự theo group_id):
     │   ├── Task B → worktree riêng → branch riêng
     │   └── Task C → worktree riêng → branch riêng
     │
-    ├── CHỜ notifications (không poll):
-    │   ├── Claude Code batch tất cả completed agent results vào 1 turn
-    │   ├── Thứ tự results = dispatch order, không phải completion order
-    │   ├── Xử lý từng result tuần tự:
-    │   │   ├── Task completed → cập nhật state, cherry-pick nếu cần
-    │   │   ├── Task failed → xử lý theo Section 16
-    │   │   └── Task cần next phase → dispatch tiếp (background)
-    │   └── Tất cả tasks trong group completed → group done → tiếp group sau
+    ├── CHỜ notifications (async, không poll):
+    │   ├── Notifications về theo completion order, KHÔNG theo dispatch order
+    │   ├── Có thể về từng cái hoặc gộp (opportunistic, ~1s window)
+    │   ├── Với mỗi notification:
+    │   │   ├── Correlate bằng agent name → tìm task tương ứng
+    │   │   ├── Parse result text → detect success/failure
+    │   │   ├── Success → cập nhật state, cherry-pick nếu cần
+    │   │   ├── Failure → parse error, xử lý theo Section 16
+    │   │   └── Cập nhật registry active_agents
+    │   └── Tất cả tasks trong group có result → group done → tiếp group sau
     │
     └── Group completed → tiếp parallel group tiếp theo
 ```
@@ -1275,29 +1277,54 @@ Trước khi dispatch parallel group:
 
 ### 11.5 Parallel Wait Mechanism
 
-Background agents hoàn thành → Claude Code runtime batch notifications vào turn tiếp theo của orchestrator.
+Background agents hoàn thành → notification gửi về orchestrator.
 
-**Đặc điểm đã xác nhận:**
-- **Batching:** TẤT CẢ pending notifications gộp vào 1 message turn
-- **Thứ tự:** Theo dispatch order (tool_use_id), KHÔNG theo completion time
-- **Không drop:** Cả N results đều present, không race condition
-- **Model:** Event batching (giống React batched state updates)
+**⚠ ĐÃ TEST XÁC NHẬN — KHÔNG giả định khác:**
 
-**Orchestrator KHÔNG poll — chỉ đợi notifications:**
+1. **KHÔNG có batching guarantee**
+   - Notifications về TỪNG CÁI MỘT
+   - Completions trong ~1s window CÓ THỂ gộp — nhưng đây là behavior
+     của polling interval, KHÔNG phải feature
+   - Orchestrator PHẢI xử lý được cả single lẫn batched notifications
+
+2. **Thứ tự = COMPLETION ORDER, không phải dispatch order**
+   - Agent C xong trước Agent A → C notification về trước
+   - Orchestrator PHẢI correlate result với task bằng agent name
+   - KHÔNG BAO GIỜ assume thứ tự
+
+3. **Error handling = parse result text**
+   - Agent KHÔNG crash khi gặp lỗi tool (file không tồn tại, command fail...)
+   - Status LUÔN là "completed" — kể cả khi agent gặp lỗi
+   - Orchestrator PHẢI parse result text để detect failure
+   - Pattern: check result chứa keyword lỗi hoặc thiếu expected output format
+
+4. **SendMessage resume = HOẠT ĐỘNG**
+   - Background agent nhận SendMessage → resume từ transcript
+   - Context từ phase trước được giữ nguyên
+   - Đây là cơ chế đáng tin cậy cho multi-phase workflows
+
+5. **Scale = 5 concurrent agents OK**
+   - Không drop, không timeout
+   - Chưa test > 5 — recommend giới hạn max_agents_per_group = 5
+
+**Flow:**
 
 ```
-Dispatch Task A (background) → dispatch Task B (background) → dispatch Task C (background)
+Dispatch Task A, B, C (background, cùng lúc)
     ↓
-Orchestrator nhận 1 batched turn chứa results [A, B, C]
+Orchestrator đợi notifications
     ↓
-Xử lý tuần tự theo dispatch order:
-    ├── Task A result → cập nhật state, chuyển phase tiếp
-    ├── Task B result → cập nhật state, chuyển phase tiếp
-    └── Task C result → cập nhật state, chuyển phase tiếp
+Notification đến (từng cái hoặc batch ngẫu nhiên)
     ↓
-Tất cả tasks trong group đã xong phase hiện tại?
-    ├── CÓ → group phase completed, dispatch phase tiếp cho cả group
-    └── KHÔNG → dispatch phase tiếp cho tasks đã xong, chờ tasks còn lại
+Với MỖI notification:
+    ├── Identify task bằng agent name (parse "{role}-{wf_id}-{task_id}")
+    ├── Parse result text:
+    │   ├── Chứa expected output format → task phase SUCCESS
+    │   └── Thiếu expected format / chứa error keywords → task phase FAILED
+    ├── Cập nhật state file cho task tương ứng
+    └── Kiểm tra: tất cả tasks trong group đã có result?
+          ├── CHƯA → tiếp tục đợi notifications
+          └── RỒI → group phase completed, dispatch phase tiếp
 ```
 
 ---
@@ -1544,6 +1571,22 @@ Dispatch history (`dispatches[]`) KHONG reset khi retry — chen `retry_boundary
 **NGUYEN TAC: Cache failure KHONG BAO GIO fail workflow.**
 Moi cache operation (lookup, create, invalidate, evict) deu wrap trong try/catch.
 Neu cache loi → log warning → tiep tuc pipeline binh thuong (nhu khong co cache).
+
+### Agent "Completed" nhưng thực tế Failed
+
+Background agent LUÔN trả status "completed" kể cả khi gặp lỗi.
+Orchestrator detect failure bằng cách parse result text:
+
+**Patterns indicate FAILURE:**
+- Result không chứa expected output keyword (VD: thiếu "approved" hoặc "issues:")
+- Result chứa: "Error", "Failed", "không tìm thấy", "không thể"
+- Result rỗng hoặc quá ngắn (< 20 chars)
+
+**Khi detect failure:**
+1. Log: `🔴 ▸ [{HH:MM:SS}] {wf_id}/{task_id} agent completed nhưng result FAILED`
+2. Ghi vào `task.history` với result: `"agent_error"`
+3. Retry theo `max_teammate_retries` (spawn mới — agent cũ context có thể corrupted)
+4. Nếu hết retries → task failed, xử lý như bình thường
 
 ### Quy trình Escalation
 
