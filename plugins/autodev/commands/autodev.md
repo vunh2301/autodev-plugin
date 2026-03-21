@@ -774,11 +774,12 @@ SendMessage(
 )
 ```
 
-**Reviewer (unified) — Foreground, spawn 1 lần ở spec_review:**
+**Reviewer (unified) — Worktree, spawn 1 lần ở spec_review:**
 ```
 Agent(
   prompt: "{template 8.2 unified-reviewer, current_phase=spec_review}",
   name: "reviewer-{wf_id}-{task_id}",
+  isolation: "worktree",
   mode: "bypassPermissions",
   model: "{từ role_mapping hoặc cross-model selection}"
 )
