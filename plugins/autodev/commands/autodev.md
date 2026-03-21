@@ -844,6 +844,21 @@ SendMessage(
 
 **Lợi ích:** Writer giữ context từ lần viết trước — biết artifact đã tạo, feedback đã nhận, không cần đọc lại từ đầu.
 
+### 9.4.1 SendMessage Retry
+
+SendMessage có thể fail do API concurrency (400 error) khi agent đang resume từ transcript.
+
+```
+SendMessage(to: "{name}", message: "...")
+    ↓
+Fail (400 / concurrency / timeout)?
+    ├── CÓ → Chờ 3 giây → Retry 1 lần
+    │         ├── Retry thành công → tiếp tục bình thường
+    │         └── Retry fail → Log 🟡 warning, tiếp tục pipeline
+    │             (KHÔNG fail task — transient error)
+    └── KHÔNG → tiếp tục bình thường
+```
+
 ### 9.5 Khi Nào Spawn Mới vs SendMessage
 
 ```
@@ -1587,6 +1602,26 @@ Orchestrator detect failure bằng cách parse result text:
 2. Ghi vào `task.history` với result: `"agent_error"`
 3. Retry theo `max_teammate_retries` (spawn mới — agent cũ context có thể corrupted)
 4. Nếu hết retries → task failed, xử lý như bình thường
+
+### Incomplete Agent Result
+
+Background agent đôi khi trả kết quả giữa chừng (truncated output, thiếu completion marker).
+
+**Detection:**
+- Writer result: KHÔNG chứa đường dẫn file output HOẶC "commit" keyword
+- Reviewer result: KHÔNG chứa "approved" HOẶC "issues:"
+
+**Handling:**
+```
+1. SendMessage(to: "{agent-name}",
+     message: "Kết quả chưa đầy đủ. Hoàn thành nhiệm vụ và trả lại kết quả đầy đủ.")
+2. Chờ response
+3. Parse lại result
+     ├── Đầy đủ → tiếp tục bình thường
+     └── Vẫn thiếu → Coi như failure, xử lý theo retry logic (Section 16)
+```
+
+Incomplete retry: tối đa 1 lần per dispatch. Không retry vô hạn.
 
 ### Quy trình Escalation
 
