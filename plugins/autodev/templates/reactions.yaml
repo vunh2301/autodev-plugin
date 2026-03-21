@@ -71,10 +71,19 @@ budget:
   workflow_budget_tokens: 200000      # Max tokens per workflow (null = unlimited)
   warn_at_pct: 80                     # Warn at N% of limit
   chars_per_token: 4                  # Heuristic (giam 2-3 cho tieng Viet)
-  # pricing:                          # Optional — chi display, khong enforce
-  #   input_per_1m: 3.00
-  #   output_per_1m: 15.00
-  #   currency: USD
+  # pricing: (USD per 1M tokens) — optional, enables cost estimates in summary
+  #   claude-opus-4:
+  #     prompt: 15.00
+  #     completion: 75.00
+  #   claude-sonnet-4:
+  #     prompt: 3.00
+  #     completion: 15.00
+  #   gpt-4o:
+  #     prompt: 2.50
+  #     completion: 10.00
+  #   gemini-2.5-pro:
+  #     prompt: 1.25
+  #     completion: 10.00
 
 # === Cache (v2.1) ===
 cache:

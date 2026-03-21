@@ -345,7 +345,17 @@ Output: parallel_groups[]
     "total_phases_run": 0,
     "total_review_loops": 0,
     "total_duration_ms": 0,
-    "parallel_groups_used": 0
+    "parallel_groups_used": 0,
+    "total_requests": 0,                  // v2.2.1: tong so requests (sum of request_count)
+    "total_estimated_cost_usd": null,     // v2.2.1: null neu khong co pricing config
+    "per_phase_stats": {                  // v2.2.1: aggregate per phase
+      // "spec_writing":  { "requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
+      // ... (dynamic, chi co phases da chay)
+    },
+    "per_model_stats": {                  // v2.2.1: aggregate per model
+      // "claude-opus-4": { "requests": 0, "tokens": 0, "estimated_cost_usd": 0 },
+      // ... (dynamic, chi co models da dung)
+    }
   },
 
   "tasks": [
@@ -401,9 +411,11 @@ Output: parallel_groups[]
         "tokens_limit": null,         // null = unlimited, number = limit
         "status": "OK",              // "OK" | "WARN" | "EXCEEDED"
         "dispatches": [
-          // { "phase": "spec_writing", "role": "spec-writer", "model": "claude",
-          //   "prompt_tokens": 2100, "completion_tokens": 1800, "total_tokens": 3900,
-          //   "has_tool_calls": false, "at": "ISO" }
+          // { "phase": "spec_writing", "role": "spec-writer", "model": "claude-opus-4",
+          //   "prompt_chars": 8400, "completion_chars": 7200,
+          //   "estimated_prompt_tokens": 2100, "estimated_completion_tokens": 1800,
+          //   "estimated_total_tokens": 3900,
+          //   "request_count": 1, "has_tool_calls": false, "at": "ISO" }
         ]
       },
 
@@ -517,15 +529,29 @@ Cập nhật registry sau mỗi lần ghi state (Section 4).
 ### Budget Update sau moi Dispatch (v2.1)
 
 Sau MOI agent dispatch:
-1. Do prompt_chars (noi dung prompt gui cho teammate)
-2. Nhan response → do response_chars
-3. Tinh: `dispatch_tokens = ceil(prompt_chars / chars_per_token) + ceil(response_chars / chars_per_token)`
-4. Cap nhat state:
-   - `task.budget.tokens_used += dispatch_tokens`
-   - `workflow.budget.tokens_used += dispatch_tokens`
+1. Do `prompt_chars` (noi dung prompt gui cho teammate)
+2. Nhan response → do `completion_chars`
+3. Tinh tokens tach rieng:
+   - `estimated_prompt_tokens = ceil(prompt_chars / chars_per_token)`
+   - `estimated_completion_tokens = ceil(completion_chars / chars_per_token)`
+   - `estimated_total_tokens = estimated_prompt_tokens + estimated_completion_tokens`
+4. Tao dispatch record:
+   ```jsonc
+   {
+     "phase": "...", "role": "...", "model": "...",
+     "prompt_chars": ..., "completion_chars": ...,
+     "estimated_prompt_tokens": ..., "estimated_completion_tokens": ...,
+     "estimated_total_tokens": ...,
+     "request_count": 1,  // tang neu agent retry noi bo
+     "has_tool_calls": false, "at": "ISO"
+   }
+   ```
+5. Cap nhat state:
+   - `task.budget.tokens_used += estimated_total_tokens`
+   - `workflow.budget.tokens_used += estimated_total_tokens`
    - Append dispatch record vao `task.budget.dispatches[]`
-5. Kiem tra budget status (Section 21)
-6. Ghi state file (backup truoc)
+6. Kiem tra budget status (Section 21)
+7. Ghi state file (backup truoc)
 
 ### Dispatches Truncation
 
@@ -956,6 +982,19 @@ agents:
 - **Reflect phase** → dùng model nhẹ (haiku) để tiết kiệm
 
 Nếu không có `reactions.yaml` hoặc không có `role_mapping` → dùng model mặc định của Claude Code.
+
+**Pricing config** (optional — enables cost estimates in Reflect summary):
+
+```yaml
+budget:
+  pricing:  # USD per 1M tokens, keyed by model name
+    claude-opus-4:    { prompt: 15.00, completion: 75.00 }
+    claude-sonnet-4:  { prompt: 3.00,  completion: 15.00 }
+    gpt-4o:           { prompt: 2.50,  completion: 10.00 }
+    gemini-2.5-pro:   { prompt: 1.25,  completion: 10.00 }
+```
+
+Nếu không có `budget.pricing` → Reflect summary chỉ hiện tokens và requests, ẩn cost columns.
 
 ---
 
@@ -1594,7 +1633,7 @@ Output cuoi workflow: total reviews, cross/same breakdown, issues found, escalat
 
 ### 21.1 Token Estimation
 
-`dispatch_tokens = ceil(prompt_chars / cpt) + ceil(response_chars / cpt)` (default cpt=4)
+`estimated_prompt_tokens = ceil(prompt_chars / cpt)`, `estimated_completion_tokens = ceil(completion_chars / cpt)`, `estimated_total_tokens = prompt + completion` (default cpt=4). Moi dispatch record luu tach rieng prompt/completion tokens va chars goc.
 
 ### 21.2 Budget Enforcement — 4 Muc
 
@@ -1997,36 +2036,100 @@ Khi user gọi `/autodev "yêu cầu"`:
 
 ---
 
-## 28. Reflect Phase — Tong Ket Cuoi Workflow (v2 + v2.1)
+## 28. Reflect Phase — Tong Ket Cuoi Workflow (v2 + v2.1 + v2.2.1)
 
-### 28.1 General Summary
+### 28.0 Aggregate Computation
+
+Truoc khi hien summary, iterate qua tat ca `task.budget.dispatches[]` cua moi task:
 
 ```
-═══════════════════════════════════════
+for each task:
+  for each dispatch in task.budget.dispatches:
+    // Per-phase stats
+    per_phase_stats[dispatch.phase].requests += dispatch.request_count
+    per_phase_stats[dispatch.phase].prompt_tokens += dispatch.estimated_prompt_tokens
+    per_phase_stats[dispatch.phase].completion_tokens += dispatch.estimated_completion_tokens
+    per_phase_stats[dispatch.phase].total_tokens += dispatch.estimated_total_tokens
+
+    // Per-model stats
+    per_model_stats[dispatch.model].requests += dispatch.request_count
+    per_model_stats[dispatch.model].tokens += dispatch.estimated_total_tokens
+
+    // If pricing config exists for this model:
+    if pricing[dispatch.model]:
+      cost = (dispatch.estimated_prompt_tokens * pricing[model].prompt / 1_000_000)
+           + (dispatch.estimated_completion_tokens * pricing[model].completion / 1_000_000)
+      per_model_stats[dispatch.model].estimated_cost_usd += cost
+
+    total_requests += dispatch.request_count
+```
+
+Luu ket qua vao `reflect` object trong state file.
+
+### 28.1 Summary Format
+
+Output khi workflow completed:
+
+```
+═══════════════════════════════════════════════════════════════
   WORKFLOW SUMMARY: {wf_id}
-═══════════════════════════════════════
-  Request: {original_request}
-  Duration: {total_duration}
-  Tasks: {completed}/{total} completed
-  Parallel groups: {groups_used}
-  Review loops: {total_loops}
-═══════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+  Request:    "{original_request}"
+  Duration:   {total_duration}
+  Tasks:      {completed}/{total} completed
+  Groups:     {parallel_groups_used} parallel groups
+  Loops:      {total_review_loops} review loops
+═══════════════════════════════════════════════════════════════
+
+  TOKEN USAGE BY PHASE
+  ───────────────────────────────────────────────────────────
+  Phase              Requests   Prompt   Completion    Total
+  ───────────────────────────────────────────────────────────
+  spec_writing              2    3,200      4,100      7,300
+  spec_review               3    2,800      1,200      4,000
+  plan_writing              1    4,500      5,200      9,700
+  plan_review               2    3,100      1,000      4,100
+  implementing              3   12,400     18,600     31,000
+  code_review               2    8,200      2,400     10,600
+  pr_review                 1    1,500        800      2,300
+  ───────────────────────────────────────────────────────────
+  TOTAL                    14   35,700     33,300     69,000
+
+  TOKEN USAGE BY MODEL
+  ───────────────────────────────────────────────────────────
+  Model                Requests    Tokens    Est. Cost
+  ───────────────────────────────────────────────────────────
+  claude-opus-4              8    45,000       ~$0.68
+  gpt-4o                     5    21,000       ~$0.12
+  gemini-2.5-pro             1     3,000       ~$0.02
+  ───────────────────────────────────────────────────────────
+  TOTAL                     14    69,000       ~$0.82
+
+  PER-TASK BREAKDOWN
+  ───────────────────────────────────────────────────────────
+  Task                 Requests  Tokens   Loops  Duration
+  ───────────────────────────────────────────────────────────
+  rate-limiting              6   32,000     2    18m 20s
+  auth-refactor              4   18,000     1    10m 05s
+  search-caching             4   19,000     1    12m 30s
+
+  CACHE PERFORMANCE
+  ───────────────────────────────────────────────────────────
+  Spec hits: 1/3    Plan hits: 0/3    Time saved: ~4m 20s
+
+═══════════════════════════════════════════════════════════════
 ```
 
-### 28.2 Budget Summary (v2.1)
+### 28.2 Format Rules
 
-Token usage per task/phase/model. Cost estimate (neu co pricing config).
+- So tokens format co dau phay ngan hang nghin (VD: `45,000`)
+- Cost hien thi `~$X.XX` (uoc tinh, prefix `~`)
+- Neu khong co `budget.pricing` config → an cot `Est. Cost`, section `TOKEN USAGE BY MODEL` chi hien Requests + Tokens
+- Duration format: `Xh Ym Zs` (bo don vi = 0, VD: `18m 20s` thay vi `0h 18m 20s`)
+- Section `CACHE PERFORMANCE` chi hien khi cache enabled
+- Chi hien phases co data (bo phases request=0)
+- Tat ca text bang tieng Anh (data table, khong phai prose)
 
-### 28.3 Cache Performance (v2.1)
+### 28.3 Cross-Model Summary (v2.1)
 
-Spec/plan hit rates, thoi gian tiet kiem, entries hien tai.
-
-### 28.4 Cross-Model Summary (v2.1)
-
-Xem Section 20.2.
-
-### 28.5 Per-Task Breakdown
-
-Cho mỗi task: phases run, loop counts, duration, model used, budget consumed.
-
-Cập nhật `reflect` object trong state file với dữ liệu tổng kết.
+Xem Section 20.2 — bo sung ben canh summary tren, KHONG thay the.
