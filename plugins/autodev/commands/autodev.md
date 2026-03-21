@@ -54,7 +54,16 @@ Khi user gọi `/autodev "yêu cầu"`, bạn bắt đầu pipeline từ đầu 
 
 ---
 
-## 2. State Machine
+## 2. Language & Output Rules
+
+**Mặc định:** Tất cả output bằng ngôn ngữ của user (detect từ yêu cầu gốc).
+Giữ tiếng Anh cho: code, commit prefix, branch names, file paths, JSON keys.
+
+Nếu project có `.workflow/reactions.yaml` với `language: vi` → bắt buộc Tiếng Việt.
+
+---
+
+## 3. State Machine
 
 ### Sơ Đồ Trạng Thái
 
