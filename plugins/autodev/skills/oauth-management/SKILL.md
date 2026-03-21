@@ -1,6 +1,6 @@
 ---
-name: autodev-auth
-description: "Authentication management for cross-model dispatch — login, logout, multi-account, token management. Supports: codex (OpenAI). Future: gemini, anthropic."
+name: oauth-management
+description: "OAuth token management for cross-model dispatch — how to run oauth.mjs commands, parse output, handle login/refresh flows"
 ---
 
 # Authentication Management
