@@ -112,7 +112,7 @@ export class AccountManager {
     }
 
     throw new Error(
-      'Chua co OAuth account nao. Chay "/autodev oauth login" truoc.'
+      'Chua co OAuth account nao. Chay "/autodev_auth codex login" truoc.'
     )
   }
 

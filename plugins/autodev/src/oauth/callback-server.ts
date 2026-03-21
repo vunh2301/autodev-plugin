@@ -24,6 +24,7 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <body style="font-family:system-ui;text-align:center;padding-top:80px">
   <h2>Login thanh cong!</h2>
   <p>Ban co the dong tab nay.</p>
+  <script>window.close()</script>
 </body>
 </html>`
 
@@ -134,7 +135,7 @@ export function startCallbackServer(options: CallbackServerOptions): Promise<Cal
 
     // Bind to localhost only
     server.listen(port, '127.0.0.1', () => {
-      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`
+      const callbackUrl = `http://localhost:${port}${callbackPath}`
 
       const callbackServer: CallbackServer = {
         url: callbackUrl,

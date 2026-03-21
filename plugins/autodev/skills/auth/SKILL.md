@@ -1,73 +1,73 @@
 ---
-name: oauth
-description: "OAuth management for OpenAI cross-model dispatch — login, logout, multi-account, token management"
+name: autodev-auth
+description: "Authentication management for cross-model dispatch — login, logout, multi-account, token management. Supports: codex (OpenAI). Future: gemini, anthropic."
 ---
 
-# OAuth Management
+# Authentication Management
 
-Quan ly OAuth cho OpenAI (Codex) — login, logout, multi-account, token management.
+Quan ly authentication cho cross-model dispatch. Hien ho tro: **codex** (OpenAI). Tuong lai: gemini, anthropic.
 
 ## Khi nao dung
 
-- User yeu cau login OpenAI / quan ly OAuth accounts
-- Cross-model dispatch can token de goi GPT API
-- User muon xem trang thai OAuth, chuyen account mac dinh
+- User yeu cau login provider (OpenAI, Gemini, v.v.)
+- Cross-model dispatch can token de goi API
+- User muon xem trang thai auth, chuyen account mac dinh
 
-## Login (PKCE + auto-fallback Device Code)
+## Storage
+
+Tokens luu tai user-level (share giua cac projects):
+- **Linux/macOS:** `~/.config/autodev/oauth/`
+- **Windows:** `%APPDATA%\autodev\oauth\`
+
+## Provider: codex (OpenAI)
+
+### Login (PKCE + auto-fallback Device Code)
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs login [account-name]
 ```
 
-Doc JSON output. Neu PKCE: browser se mo, thong bao cho user cho callback. Neu headless/SSH: tu dong chuyen sang Device Code — hien thi URL + code cho user nhap.
-
-## Login (Force Device Code)
+### Login (Force Device Code)
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs login --device [account-name]
 ```
 
-Hien thi URL va code. Huong dan user mo URL va nhap code.
-
-## Logout
+### Logout
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs logout <account-name>
 ```
 
-## Liet ke accounts
+### Liet ke accounts
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs accounts
 ```
 
-## Xem status
+### Xem status
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs status [account-name]
 ```
 
-Hien thi thong tin account, token validity, thoi gian het han.
-
-## Dat default account
+### Dat default account
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs default <account-name>
 ```
 
-## Force refresh token
+### Force refresh token
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs refresh [account-name]
 ```
 
-## Get Token (cho cross-model dispatch)
+### Get Token (cho cross-model dispatch)
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/oauth.mjs get-token [account-name] [--force-refresh]
 ```
-
-Dung output token cho `Authorization: Bearer` header khi goi OpenAI API.
 
 ## Output parsing
 

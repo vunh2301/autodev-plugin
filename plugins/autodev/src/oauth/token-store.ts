@@ -52,7 +52,7 @@ async function secureFilePermissions(filePath: string): Promise<void> {
 export class TokenStore {
   private storageDir: string
 
-  constructor(storageDir: string = '.workflow/oauth') {
+  constructor(storageDir: string) {
     this.storageDir = storageDir
     warnIfSharedDirectory(storageDir)
   }
@@ -82,7 +82,7 @@ export class TokenStore {
       return creds
     } catch (err: any) {
       if (err.code === 'ENOENT') {
-        throw new Error(`Không tìm thấy credentials cho account "${accountName}". Chạy "/autodev oauth login ${accountName}" trước.`)
+        throw new Error(`Không tìm thấy credentials cho account "${accountName}". Chạy "/autodev_auth codex login ${accountName}" trước.`)
       }
       throw err
     }

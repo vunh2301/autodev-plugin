@@ -6,7 +6,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, unlink, stat, chmod } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
 import path from 'node:path'
-import { userInfo } from 'node:os'
+import { userInfo, homedir } from 'node:os'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 
@@ -44,7 +44,13 @@ function generateState() {
 
 // ===== lock.ts =====
 
-const DEFAULT_LOCK_DIR = '.workflow/oauth'
+function getDefaultStorageDir() {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(homedir(), 'AppData', 'Roaming'), 'autodev', 'oauth')
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'autodev', 'oauth')
+}
+const DEFAULT_LOCK_DIR = getDefaultStorageDir()
 const LOCK_TIMEOUT_MS = 30000
 const LOCK_RETRY_MS = 100
 const LOCK_MAX_RETRIES = 50
@@ -178,7 +184,7 @@ async function secureFilePermissions(filePath) {
 const DEFAULT_EXPIRY_BUFFER_MS = 300000
 
 class TokenStore {
-  constructor(storageDir = '.workflow/oauth') {
+  constructor(storageDir = getDefaultStorageDir()) {
     this.storageDir = storageDir
     warnIfSharedDirectory(storageDir)
   }
@@ -202,7 +208,7 @@ class TokenStore {
       return creds
     } catch (err) {
       if (err.code === 'ENOENT') {
-        throw new Error(`Khong tim thay credentials cho account "${accountName}". Chay "/autodev oauth login ${accountName}" truoc.`)
+        throw new Error(`Khong tim thay credentials cho account "${accountName}". Chay "/autodev_auth codex login ${accountName}" truoc.`)
       }
       throw err
     }
@@ -331,7 +337,7 @@ class AccountManager {
     if (registry.accounts.length > 0) {
       return registry.accounts[0].name
     }
-    throw new Error('Chua co OAuth account nao. Chay "/autodev oauth login" truoc.')
+    throw new Error('Chua co OAuth account nao. Chay "/autodev_auth codex login" truoc.')
   }
 
   async updateStatus(name, status) {
@@ -369,6 +375,7 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <body style="font-family:system-ui;text-align:center;padding-top:80px">
   <h2>Login thanh cong!</h2>
   <p>Ban co the dong tab nay.</p>
+  <script>window.close()</script>
 </body>
 </html>`
 
@@ -467,7 +474,7 @@ function startCallbackServer(options) {
     })
 
     server.listen(port, '127.0.0.1', () => {
-      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`
+      const callbackUrl = `http://localhost:${port}${callbackPath}`
 
       resolveServer({
         url: callbackUrl,
@@ -539,7 +546,7 @@ const DEFAULT_CALLBACK_PATH = '/auth/callback'
 const DEFAULT_CALLBACK_TIMEOUT_MS = 300000
 const DEFAULT_DEVICE_POLL_MS = 5000
 const ENGINE_DEFAULT_EXPIRY_BUFFER_MS = 300000
-const DEFAULT_STORAGE_DIR = '.workflow/oauth'
+const DEFAULT_STORAGE_DIR = getDefaultStorageDir()
 const DEVICE_MAX_ATTEMPTS = 720
 const REFRESH_MAX_RETRIES = 2
 const REFRESH_BACKOFF_MS = [1000, 3000]
@@ -561,7 +568,7 @@ function openBrowserDefault(url) {
         execSync(`open "${url}"`, { stdio: 'ignore' })
         break
       case 'win32':
-        execSync(`start "" "${url}"`, { stdio: 'ignore', shell: 'cmd.exe' })
+        execSync(`rundll32 url.dll,FileProtocolHandler "${url}"`, { stdio: 'ignore' })
         break
       default:
         execSync(`xdg-open "${url}"`, { stdio: 'ignore' })
@@ -611,6 +618,8 @@ class OAuthEngine {
       code_challenge: challenge,
       code_challenge_method: 'S256',
       prompt: 'login',
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
     })
     const authorizeUrl = `${CODEX_AUTHORIZE_URL}?${params}`
 
@@ -679,13 +688,26 @@ class OAuthEngine {
       throw new Error(`Device code request failed: HTTP ${deviceResp.status} — ${text}`)
     }
 
-    const { device_auth_id, user_code, verification_uri, interval } = await deviceResp.json()
+    const deviceData = await deviceResp.json()
 
-    const verifyUrl = verification_uri || DEVICE_VERIFY_URL
+    // Handle both user_code and usercode field names (OpenAI API inconsistency)
+    const user_code = (deviceData.user_code ?? deviceData.usercode ?? '').trim()
+    const device_auth_id = deviceData.device_auth_id
+
+    if (!user_code || !device_auth_id) {
+      throw new Error('Device flow did not return required fields')
+    }
+
+    const verifyUrl = deviceData.verification_uri || DEVICE_VERIFY_URL
     console.error(`\n  Mo: ${verifyUrl}`)
     console.error(`  Nhap code: ${user_code}\n`)
 
-    const pollIntervalMs = (interval || 5) * 1000
+    // Parse interval from string or number
+    const rawInterval = deviceData.interval
+    const parsedInterval = typeof rawInterval === 'string'
+      ? parseInt(rawInterval, 10) || 5
+      : rawInterval ?? 5
+    const pollIntervalMs = parsedInterval * 1000
 
     for (let attempt = 0; attempt < DEVICE_MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new Error('Login cancelled')

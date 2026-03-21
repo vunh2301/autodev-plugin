@@ -9,7 +9,7 @@ let engine: OAuthEngine | null = null
  * Get access token for OpenAI API.
  *
  * Fallback chain:
- *   1. OAuth token (from .workflow/oauth/) — auto-refresh if needed
+ *   1. OAuth token (from ~/.config/autodev/oauth/) — auto-refresh if needed
  *   2. Environment variable OPENAI_API_KEY
  *   3. Throw error with actionable message
  *
@@ -32,7 +32,7 @@ export async function getAccessToken(accountName?: string, forceRefresh?: boolea
 
   // 3. Fail
   throw new Error(
-    'Khong co OpenAI credentials. Chay "/autodev oauth login" hoac set OPENAI_API_KEY.'
+    'Khong co OpenAI credentials. Chay "/autodev_auth codex login" hoac set OPENAI_API_KEY.'
   )
 }
 

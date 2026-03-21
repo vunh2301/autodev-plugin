@@ -1,6 +1,8 @@
 // src/oauth/engine.ts — OAuthEngine: PKCE + Device Code flows, token refresh, multi-account
 
 import { execSync } from 'node:child_process'
+import { homedir } from 'node:os'
+import path from 'node:path'
 import type {
   OAuthCredentials,
   OAuthAccount,
@@ -30,7 +32,14 @@ const DEFAULT_CALLBACK_PATH = '/auth/callback'
 const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000  // 5 min
 const DEFAULT_DEVICE_POLL_MS = 5_000         // 5s
 const DEFAULT_EXPIRY_BUFFER_MS = 300_000     // 5 min
-const DEFAULT_STORAGE_DIR = '.workflow/oauth'
+/** Resolve default storage dir: ~/.config/autodev/oauth (cross-platform) */
+function getDefaultStorageDir(): string {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(homedir(), 'AppData', 'Roaming'), 'autodev', 'oauth')
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'autodev', 'oauth')
+}
+const DEFAULT_STORAGE_DIR = getDefaultStorageDir()
 const DEVICE_MAX_ATTEMPTS = 720              // 720 * 5s = 1 hour
 const REFRESH_MAX_RETRIES = 2
 const REFRESH_BACKOFF_MS = [1000, 3000]
@@ -67,7 +76,7 @@ function openBrowserDefault(url: string): void {
         execSync(`open "${url}"`, { stdio: 'ignore' })
         break
       case 'win32':
-        execSync(`start "" "${url}"`, { stdio: 'ignore', shell: 'cmd.exe' })
+        execSync(`rundll32 url.dll,FileProtocolHandler "${url}"`, { stdio: 'ignore' })
         break
       default:
         execSync(`xdg-open "${url}"`, { stdio: 'ignore' })
@@ -134,6 +143,8 @@ export class OAuthEngine {
       code_challenge: challenge,
       code_challenge_method: 'S256',
       prompt: 'login',
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
     })
     const authorizeUrl = `${CODEX_AUTHORIZE_URL}?${params}`
 
@@ -213,20 +224,33 @@ export class OAuthEngine {
       throw new Error(`Device code request failed: HTTP ${deviceResp.status} — ${text}`)
     }
 
-    const { device_auth_id, user_code, verification_uri, interval } = await deviceResp.json() as {
+    const deviceData = await deviceResp.json() as {
       device_auth_id: string
-      user_code: string
+      user_code?: string
+      usercode?: string
       verification_uri?: string
-      interval?: number
+      interval?: number | string
+    }
+
+    // Handle both user_code and usercode field names (OpenAI API inconsistency)
+    const user_code = (deviceData.user_code ?? deviceData.usercode ?? '').trim()
+    const device_auth_id = deviceData.device_auth_id
+
+    if (!user_code || !device_auth_id) {
+      throw new Error('Device flow did not return required fields')
     }
 
     // 2. Display instructions
-    const verifyUrl = verification_uri ?? DEVICE_VERIFY_URL
+    const verifyUrl = deviceData.verification_uri ?? DEVICE_VERIFY_URL
     console.error(`\n  Mo: ${verifyUrl}`)
     console.error(`  Nhap code: ${user_code}\n`)
 
-    // 3. Poll for authorization
-    const pollIntervalMs = (interval ?? 5) * 1000
+    // 3. Poll for authorization — parse interval from string or number
+    const rawInterval = deviceData.interval
+    const parsedInterval = typeof rawInterval === 'string'
+      ? parseInt(rawInterval, 10) || 5
+      : rawInterval ?? 5
+    const pollIntervalMs = parsedInterval * 1000
 
     for (let attempt = 0; attempt < DEVICE_MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new Error('Login cancelled')

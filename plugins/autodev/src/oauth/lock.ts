@@ -3,7 +3,8 @@
 import { mkdir, writeFile, unlink, stat } from 'node:fs/promises'
 import path from 'node:path'
 
-const DEFAULT_LOCK_DIR = '.workflow/oauth'
+// Lock dir is always passed by engine — no default needed
+const DEFAULT_LOCK_DIR = ''
 const LOCK_TIMEOUT_MS = 30_000       // refresh lock stale after 30s
 const LOCK_RETRY_MS = 100            // retry interval
 const LOCK_MAX_RETRIES = 50          // max 50 * 100ms = 5s wait
@@ -20,7 +21,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Acquire file lock for refresh cycle, execute fn, then release.
- * Lock file: .workflow/oauth/.refresh-lock-{accountName}
+ * Lock file: ~/.config/autodev/oauth/.refresh-lock-{accountName}
  *
  * Strategy:
  *   1. Try exclusive file create (flag 'wx')
@@ -85,7 +86,7 @@ export async function withRefreshLock<T>(
 
 /**
  * Acquire login lock — prevents two concurrent login flows for the same account.
- * Lock file: .workflow/oauth/.login-lock-{accountName}
+ * Lock file: ~/.config/autodev/oauth/.login-lock-{accountName}
  *
  * Does NOT retry — rejects immediately if lock exists and is not stale.
  * Stale threshold: 10 minutes (login timeout).

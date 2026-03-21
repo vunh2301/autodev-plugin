@@ -48,7 +48,7 @@ export interface LoginResult {
 
 /** Options for OAuthEngine constructor */
 export interface OAuthEngineOptions {
-  /** Directory to store OAuth data. Default: '.workflow/oauth' */
+  /** Directory to store OAuth data. Default: ~/.config/autodev/oauth */
   storage_dir?: string
   /** Ports to try for PKCE callback server. Default: [1455, 1456, 1457] */
   callback_ports?: number[]
