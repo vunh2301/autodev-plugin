@@ -640,7 +640,7 @@ Format:
 
 ### 8.2 unified-reviewer
 
-**Isolation:** không (foreground) | **Mode:** `bypassPermissions`
+**Isolation:** không (foreground) | **Mode:** `bypassPermissions` | **Background:** `true`
 **Tools:** Read, Grep, Glob, Bash (chỉ cho `gh` commands)
 
 **Vai trò:** Reviewer XUYÊN SUỐT tất cả phases (spec → plan → code → PR) cho cùng 1 task. Được spawn 1 lần ở phase `spec_review`, sau đó nhận SendMessage để chuyển phase. PHẢI nhớ và cross-reference feedback từ phases trước.
@@ -754,11 +754,12 @@ Trước mỗi lần dispatch teammate:
 
 | | Subagent (cũ) | Teammate (v2) |
 |---|---|---|
-| Spawn | `Agent(prompt)` — one-shot, huỷ sau khi done | `Agent(prompt, name)` — named, giữ context |
+| Spawn | `Agent(prompt)` — one-shot, huỷ sau khi done | `Agent(prompt, name, run_in_background: true)` — named, giữ sống |
 | Follow-up | Không thể — phải spawn mới | `SendMessage(to=name)` — gửi thêm instructions |
 | Review loop | Spawn agent mới mỗi vòng | SendMessage feedback → agent sửa trên context cũ |
 | Song song | Nhiều Agent calls | Nhiều named agents, coordinate qua SendMessage |
 | Context | Mất sau mỗi dispatch | Giữ nguyên — agent nhớ artifacts, feedback trước đó |
+| Lifetime | Terminate sau response | Sống cho đến khi orchestrator kết thúc workflow |
 
 **Quy tắc đặt tên teammate:**
 ```
@@ -800,13 +801,13 @@ SendMessage(
 )
 ```
 
-**Reviewer (unified) — Worktree, spawn 1 lần ở spec_review:**
+**Reviewer (unified) — Background, spawn 1 lần ở spec_review:**
 ```
 Agent(
   prompt: "{template 8.2 unified-reviewer, current_phase=spec_review}",
   name: "reviewer-{wf_id}-{task_id}",
-  isolation: "worktree",
   mode: "bypassPermissions",
+  run_in_background: true,
   model: "{từ role_mapping hoặc cross-model selection}"
 )
 ```
@@ -869,6 +870,10 @@ Cần dispatch teammate cho {role}/{wf_id}/{task_id}
     |
     +-- Teammate trả kết quả → orchestrator xử lý
 ```
+
+**⚠ CRITICAL: `run_in_background: true` là BẮT BUỘC cho MỌI teammate Agent() call.**
+Thiếu flag này → agent terminate sau response đầu tiên → SendMessage fail → review loop broken.
+Áp dụng cho CẢ author LẪN reviewer, không ngoại lệ.
 
 **Lưu ý:**
 - Mỗi task có tối đa 3 teammates cùng lúc: 1 author (unified) + 1 reviewer (unified) + 1 escalation (v2.1)
