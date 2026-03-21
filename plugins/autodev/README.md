@@ -14,16 +14,16 @@ Automated development workflow orchestrator for Claude Code.
 | `/resume-autodev` | Resume paused workflow |
 | `/autodev-retry` | Retry failed tasks |
 | `/autodev-cancel` | Cancel workflows |
-| `/autodev_auth codex login` | Login to OpenAI |
-| `/autodev_auth codex status` | Show token status |
-| `/autodev_auth codex accounts` | List accounts |
+| `/autodev-auth codex login` | Login to OpenAI |
+| `/autodev-auth codex status` | Show token status |
+| `/autodev-auth codex accounts` | List accounts |
 
 ## Authentication
 
 Cross-model review requires OpenAI OAuth login:
 
 ```
-/autodev_auth codex login
+/autodev-auth codex login
 ```
 
 Tokens are stored at user-level (shared across projects):

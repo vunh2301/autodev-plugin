@@ -32,7 +32,7 @@ export async function getAccessToken(accountName?: string, forceRefresh?: boolea
 
   // 3. Fail
   throw new Error(
-    'Khong co OpenAI credentials. Chay "/autodev_auth codex login" hoac set OPENAI_API_KEY.'
+    'Khong co OpenAI credentials. Chay "/autodev-auth codex login" hoac set OPENAI_API_KEY.'
   )
 }
 

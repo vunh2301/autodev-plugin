@@ -208,7 +208,7 @@ class TokenStore {
       return creds
     } catch (err) {
       if (err.code === 'ENOENT') {
-        throw new Error(`Khong tim thay credentials cho account "${accountName}". Chay "/autodev_auth codex login ${accountName}" truoc.`)
+        throw new Error(`Khong tim thay credentials cho account "${accountName}". Chay "/autodev-auth codex login ${accountName}" truoc.`)
       }
       throw err
     }
@@ -337,7 +337,7 @@ class AccountManager {
     if (registry.accounts.length > 0) {
       return registry.accounts[0].name
     }
-    throw new Error('Chua co OAuth account nao. Chay "/autodev_auth codex login" truoc.')
+    throw new Error('Chua co OAuth account nao. Chay "/autodev-auth codex login" truoc.')
   }
 
   async updateStatus(name, status) {

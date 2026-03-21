@@ -82,7 +82,7 @@ export class TokenStore {
       return creds
     } catch (err: any) {
       if (err.code === 'ENOENT') {
-        throw new Error(`Không tìm thấy credentials cho account "${accountName}". Chạy "/autodev_auth codex login ${accountName}" trước.`)
+        throw new Error(`Không tìm thấy credentials cho account "${accountName}". Chạy "/autodev-auth codex login ${accountName}" trước.`)
       }
       throw err
     }

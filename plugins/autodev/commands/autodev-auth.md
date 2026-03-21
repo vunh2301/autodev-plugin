@@ -1,14 +1,14 @@
 ---
-name: autodev_auth
-description: "Quan ly authentication cho cross-model dispatch. Syntax: /autodev_auth <provider> <action> [args]. Providers: codex (OpenAI). Actions: login, logout, status, accounts, default, refresh, get-token."
+name: autodev-auth
+description: "Quan ly authentication cho cross-model dispatch. Syntax: /autodev-auth <provider> <action> [args]. Providers: codex (OpenAI). Actions: login, logout, status, accounts, default, refresh, get-token."
 allowed-tools: Read, Bash, Glob
 ---
 
-# /autodev_auth — Authentication Management
+# /autodev-auth — Authentication Management
 
 ## Parse arguments
 
-Format: `/autodev_auth <provider> <action> [args...]`
+Format: `/autodev-auth <provider> <action> [args...]`
 
 ### Supported providers
 
@@ -37,12 +37,12 @@ Format: `/autodev_auth <provider> <action> [args...]`
 ### 1. Parse provider va action
 
 ```
-Input: /autodev_auth codex login work
+Input: /autodev-auth codex login work
   → provider = "codex"
   → action = "login"
   → remaining_args = ["work"]
 
-Input: /autodev_auth codex login --device
+Input: /autodev-auth codex login --device
   → provider = "codex"
   → action = "login"
   → remaining_args = ["--device"]
