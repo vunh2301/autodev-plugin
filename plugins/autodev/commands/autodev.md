@@ -1176,19 +1176,82 @@ CHO MỖI parallel group (tuần tự theo group_id):
 
 ### 11.2 Merge Strategy
 
-Mỗi task trong parallel group:
-1. Chạy trên **branch riêng**: `workflow/{slug}`
-2. Tạo **PR riêng** cho mỗi task
-3. Merge từng PR independently
+Mỗi task chạy trong **worktree isolation** trên branch `workflow/{slug}`.
+
+**TRƯỚC khi spawn worktree agent:**
+
+```
+1. Kiểm tra local changes trên main branch:
+   git_status = `git status --porcelain`
+
+2. Nếu có local changes (modified/untracked):
+   `git stash push -m "autodev-pre-{wf_id}" --include-untracked`
+   Lưu stash_ref vào state: workflow.stash_ref = "autodev-pre-{wf_id}"
+
+3. Spawn worktree agent (fork từ HEAD hiện tại)
+```
+
+**SAU khi worktree agent hoàn thành — Merge Flow:**
+
+```
+1. Lấy commit hash từ worktree branch:
+   commit_hash = `git log workflow/{slug} -1 --format="%H"`
+
+2. CHERRY-PICK (ưu tiên hơn merge — tránh merge commit noise):
+   `git cherry-pick {commit_hash} --no-commit`
+
+   Nếu OK → `git commit` → done
+
+3. Nếu cherry-pick CONFLICT:
+   a. Check loại conflict:
+
+      - LOCAL CHANGES BLOCK (error: local changes would be overwritten):
+        → `git stash` → retry cherry-pick → `git stash pop`
+
+      - ADD/ADD CONFLICT (cùng file tạo trên cả 2 branch):
+        → `git checkout workflow/{slug} -- {conflicted_files}`
+        → `git add {conflicted_files}` → `git commit`
+
+      - UNTRACKED FILE BLOCK (untracked file would be overwritten):
+        → `git rm --cached {files}` hoặc `rm {files}`
+        → Retry cherry-pick
+
+      - CONTENT CONFLICT (cùng dòng sửa khác nhau):
+        → Re-dispatch implementer với conflict context (Section 11.3)
+
+4. Sau merge thành công:
+   Nếu workflow.stash_ref tồn tại:
+     `git stash pop` (hoặc `git stash apply` nếu lo mất data)
+     Xóa stash_ref khỏi state
+```
+
+**Quy tắc merge order:**
+- Tasks trong cùng parallel group: merge theo thứ tự hoàn thành (first done, first merged)
+- Groups merge tuần tự: group 1 merge hết → group 2 bắt đầu
+- Mỗi task tạo PR riêng, merge PR independently
 
 ### 11.3 Conflict Resolution
 
-Khi merge task B (group 2) sau khi group 1 đã merge:
-1. `git rebase main` trên branch task B
-2. Nếu conflict:
-   a. Auto-resolve nếu chỉ là trivial conflicts
-   b. Nếu non-trivial → re-dispatch implementer với conflict context
-   c. Nếu re-implement cũng fail → pause task, thông báo user
+Khi cherry-pick/merge gặp content conflict (non-trivial):
+
+```
+1. Parse conflicted files: `git diff --name-only --diff-filter=U`
+
+2. Nếu ≤ 3 files conflict:
+   → Re-dispatch implementer với context:
+     "Resolve merge conflicts in: {files}.
+      Ours (main): {ours_content}.
+      Theirs (worktree): {theirs_content}."
+   → Implementer resolve → commit
+
+3. Nếu > 3 files conflict:
+   → Pause task, thông báo user:
+     "Task {slug} has {N} merge conflicts.
+      Run /resume-autodev {wf_id}:{task_id} after manual resolution."
+
+4. Nếu re-implement cũng fail (2 attempts):
+   → Pause task, log conflict details
+```
 
 ### 11.4 Resource Tracking
 
