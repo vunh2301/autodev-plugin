@@ -1,58 +1,66 @@
 ---
 name: stop-autodev
-description: "Stop a running workflow. Usage: /stop-autodev (all), /stop-autodev wf_001 (one workflow), /stop-autodev wf_001:task_01 (one task)"
+description: "Dừng workflow đang chạy. Hỗ trợ: /stop-autodev (tất cả), /stop-autodev wf_001 (1 workflow), /stop-autodev wf_001:task_01 (1 task)"
 ---
 
-# /stop-autodev — Stop running workflow
+**⚠ Output language is determined by project.language in reactions.yaml.**
+
+# /stop-autodev — Dừng workflow đang chạy
 
 ## Parse arguments
 
-- No arg → target = ALL running workflows
+- Không có arg → target = TẤT CẢ workflows đang running
 - `wf_001` → target = 1 workflow
-- `wf_001:task_01` → target = 1 task in workflow
+- `wf_001:task_01` → target = 1 task trong workflow
 
-## Process
+## Quy trình
 
-1. **Read registry**
+1. **Đọc registry**
    - Read `.workflow/registry.json`
-   - If not found → `No workflows running.` → STOP
+   - Nếu không tồn tại → `🔴 ▸ Không có workflow nào đang chạy.` → DỪNG
 
-2. **Determine targets**
-   - No arg → filter all workflows with `status: "running"` from registry
-   - `wf_id` → find matching workflow
-   - `wf_id:task_id` → find matching workflow + task
+2. **Xác định targets**
+   - Không arg → lọc tất cả workflows có `status: "running"` từ registry
+   - `wf_id` → tìm workflow khớp, nếu không tìm thấy → `🔴 ▸ Không tìm thấy {wf_id}` → DỪNG
+   - `wf_id:task_id` → tìm workflow + task khớp
 
-3. **For each workflow target**:
+3. **Với mỗi workflow target** — lặp qua danh sách:
    a. Read `.workflow/{wf_id}/state.json`
-   b. If target is a specific task → only set that task `status: "paused"`
-   c. If target is workflow → set all running tasks to `status: "paused"`
-   d. Set workflow `status: "paused"`, `paused_by: ["command"]`, `updated_at: <ISO now>`
-   e. Create checkpoint:
+   b. Nếu target là task cụ thể → chỉ set task đó `status: "paused"`
+   c. Nếu target là workflow → set tất cả task đang running về `status: "paused"`
+   d. Set workflow `status: "paused"`, `paused_by: "command"`, `updated_at: <ISO now>`
+   e. Tạo checkpoint:
       ```json
-      { "id": "cp_NNN", "at": "<ISO now>", "task_id": "<task>", "phase": "<phase>", "message": "Stopped by /stop-autodev" }
+      { "id": "cp_NNN", "at": "<ISO now>", "task_id": "<task>", "phase": "<phase>", "message": "Dừng bởi /stop-autodev" }
       ```
-   f. Backup → write state file
-   g. Update registry entry
+   f. Backup → `.workflow/{wf_id}/state.backup.json`
+   g. Ghi `.workflow/{wf_id}/state.json`
+   h. Cập nhật entry tương ứng trong `registry.json`
 
-4. **Write updated registry.json**
+4. **Ghi registry.json** đã cập nhật
 
-5. **Output**
+5. **Output kết quả** — mỗi workflow 1 block, dùng separator:
 
 ```
 🟣 ▸ [{time}] STOP-AUTODEV
 
 🔵 ▸ [{time}] {wf_id}/{slug}
-  ⏸ Stopped — {N} tasks paused
+  ⏸ Đã dừng — {N} tasks paused
   Task 1 ({slug}): {phase} (loop {count}/{max})
   Task 2 ({slug}): {status}
-  Checkpoint: {cp_id} saved
+  Checkpoint: {cp_id} đã lưu
 
 ─────────────────────────────────
 
-🟢 ▸ Use /resume-autodev to continue.
+🔵 ▸ [{time}] {wf_id2}/{slug2}
+  ⏸ Đã dừng — {N} tasks paused
+  ...
+
+🟢 ▸ Dùng /resume-autodev để tiếp tục.
 ```
 
-## Notes
+## Lưu ý
 
-- If workflow already paused → skip, output: `🟡 ▸ {wf_id} already paused.`
-- This skill does NOT invoke the orchestrator after stopping
+- Max loop mặc định = 2
+- Nếu workflow đã paused → bỏ qua, output: `🟡 ▸ {wf_id} đã dừng rồi.`
+- Skill này KHÔNG gọi orchestrator sau khi dừng

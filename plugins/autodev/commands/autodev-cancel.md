@@ -1,70 +1,74 @@
 ---
 name: autodev-cancel
-description: "Cancel workflow or task. Usage: /autodev-cancel (all, requires confirmation), /autodev-cancel wf_001, /autodev-cancel wf_001:task_01"
+description: "Huỷ workflow hoặc task. Hỗ trợ: /autodev-cancel (tất cả, cần xác nhận), /autodev-cancel wf_001, /autodev-cancel wf_001:task_01"
 ---
 
-# /autodev-cancel — Cancel workflow or task
+**⚠ Output language is determined by project.language in reactions.yaml.**
+
+# /autodev-cancel — Huỷ workflow hoặc task
 
 ## Parse arguments
 
-- No arg → cancel ALL workflows (requires confirmation)
-- `wf_001` → cancel 1 workflow
-- `wf_001:task_01` → cancel 1 task in workflow
+- Không có arg → huỷ TẤT CẢ workflows (cần xác nhận)
+- `wf_001` → huỷ 1 workflow
+- `wf_001:task_01` → huỷ 1 task trong workflow
 
-## Process
+## Quy trình
 
-1. **Read registry**
+1. **Đọc registry**
    - Read `.workflow/registry.json`
-   - If not found → `No workflows to cancel.` → STOP
+   - Nếu không tồn tại → `🔴 ▸ Không có workflow nào để huỷ.` → DỪNG
 
-2. **If NO arg** — cancel all:
-   a. Request confirmation: `⚠ Cancel ALL {N} workflows? Type 'yes' to confirm.`
-   b. If user does NOT confirm → `Cancelled operation.` → STOP
-   c. If confirmed:
-      - For each workflow in registry:
+2. **Nếu KHÔNG có arg** — huỷ toàn bộ:
+   a. Yêu cầu xác nhận: `⚠ Huỷ TẤT CẢ {N} workflows? Gõ 'có' để xác nhận.`
+   b. Nếu user KHÔNG gõ `"có"` → `🟡 ▸ Đã hủy thao tác.` → DỪNG
+   c. Nếu user xác nhận:
+      - Với mỗi workflow trong registry:
         - Read `.workflow/{wf_id}/state.json`
-        - For each task with a branch → `git branch -D workflow/{slug}` (ignore error)
-        - Delete folder: `rm -rf .workflow/{wf_id}/`
-      - Delete `.workflow/registry.json`
-      - Try deleting `.workflow/` if empty: `rmdir .workflow 2>/dev/null`
+        - Với mỗi task có branch → `git branch -D workflow/{slug}` (ignore error)
+        - Xoá folder: `rm -rf .workflow/{wf_id}/`
+      - Xoá `.workflow/registry.json`
+      - Thử xoá `.workflow/` nếu rỗng: `rmdir .workflow 2>/dev/null`
    d. Output:
    ```
-   CANCEL-ALL
-     Cancelled {N} workflows
-     Branches deleted: {list or "none"}
-     Registry deleted.
+   🔴 ▸ [{time}] CANCEL-ALL
+     Đã huỷ {N} workflows
+     Branches đã xoá: {danh sách hoặc "không có"}
+     Registry đã xoá.
    ```
 
-3. **If `wf_id`** — cancel 1 workflow:
-   a. Find workflow in registry, if not found → `Workflow {wf_id} not found` → STOP
+3. **Nếu có `wf_id`** — huỷ 1 workflow:
+   a. Tìm workflow trong registry, nếu không tìm thấy → `🔴 ▸ Không tìm thấy {wf_id}` → DỪNG
    b. Read `.workflow/{wf_id}/state.json`
-   c. For each task with a branch → `git branch -D workflow/{slug}` (ignore error)
-   d. Delete folder: `rm -rf .workflow/{wf_id}/`
-   e. Remove entry from registry, write `registry.json`
-   f. If registry empty → delete `registry.json` too
+   c. Với mỗi task có branch → `git branch -D workflow/{slug}` (ignore error)
+   d. Xoá folder: `rm -rf .workflow/{wf_id}/`
+   e. Xoá entry khỏi registry, ghi lại `registry.json`
+   f. Nếu registry rỗng → xoá `registry.json` luôn
    g. Output:
    ```
-   Cancelled workflow {wf_id} — {N} tasks cancelled
-   Branches deleted: {list}
+   🔴 ▸ [{time}] {wf_id}
+     Đã huỷ workflow — {N} tasks cancelled
+     Branches đã xoá: {danh sách}
    ```
 
-4. **If `wf_id:task_id`** — cancel 1 task:
-   a. Find workflow + task, if not found → `{wf_id}:{task_id} not found` → STOP
-   b. If task already `completed` → `Task already completed, nothing to cancel.` → STOP
-   c. If task already `cancelled` → `Task already cancelled.` → STOP
+4. **Nếu có `wf_id:task_id`** — huỷ 1 task:
+   a. Tìm workflow + task, nếu không tìm thấy → `🔴 ▸ Không tìm thấy {wf_id}:{task_id}` → DỪNG
+   b. Nếu task đã `completed` → `🟡 ▸ Task đã hoàn thành, không cần huỷ.` → DỪNG
+   c. Nếu task đã `cancelled` → `🟡 ▸ Task đã bị huỷ rồi.` → DỪNG
    d. Set `task.status = "cancelled"`
-   e. Add history entry: `{ "phase": "cancel", "at": "<ISO now>", "result": "cancelled", "details": "Cancelled by /autodev-cancel" }`
-   f. Clean branch: `git branch -D workflow/{slug}` (ignore error)
-   g. Check: if ALL tasks are cancelled/completed → set workflow `status: "cancelled"`, update registry
-   h. Write `.workflow/{wf_id}/state.json` + `registry.json`
+   e. Thêm history entry: `{ "phase": "cancel", "at": "<ISO now>", "result": "cancelled", "details": "Huỷ bởi /autodev-cancel" }`
+   f. Dọn branch: `git branch -D workflow/{slug}` (ignore error)
+   g. Kiểm tra: nếu TẤT CẢ tasks đều cancelled/completed → set workflow `status: "cancelled"`, cập nhật registry
+   h. Ghi `.workflow/{wf_id}/state.json` + `registry.json`
    i. Output:
    ```
-   Cancelled task {task_id} ({slug})
-   Branch deleted: workflow/{slug}
+   🔴 ▸ [{time}] {wf_id}/{task_id}
+     Đã huỷ task ({slug})
+     Branch đã xoá: workflow/{slug}
    ```
 
-## Notes
+## Lưu ý
 
-- Always clean branches before deleting state
-- Use `2>/dev/null` or ignore errors for git branch -D
-- Do NOT delete merged code — only delete branches and state files
+- Luôn dọn branches trước khi xoá state
+- Dùng `2>/dev/null` hoặc ignore error cho git branch -D
+- KHÔNG xoá code đã merge — chỉ xoá branches và state files

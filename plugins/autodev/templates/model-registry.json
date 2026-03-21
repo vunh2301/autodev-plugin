@@ -5,36 +5,41 @@
       "provider": "anthropic",
       "capabilities": ["write", "review", "escalate"],
       "cost_tier": "high",
-      "avg_response_time_sec": 45
+      "avg_response_time_sec": 45,
+      "auth_required": "none"
     },
     {
       "id": "claude-sonnet-4",
       "provider": "anthropic",
       "capabilities": ["write", "review"],
       "cost_tier": "medium",
-      "avg_response_time_sec": 15
+      "avg_response_time_sec": 15,
+      "auth_required": "none"
     },
     {
       "id": "claude-haiku-3.5",
       "provider": "anthropic",
       "capabilities": ["review"],
       "cost_tier": "low",
-      "avg_response_time_sec": 5
+      "avg_response_time_sec": 5,
+      "auth_required": "none"
     },
     {
       "id": "gpt-4o",
       "provider": "openai",
       "capabilities": ["review", "escalate"],
       "cost_tier": "medium",
-      "avg_response_time_sec": 20
+      "avg_response_time_sec": 20,
+      "auth_required": "oauth"
     },
     {
       "id": "gemini-2.5-pro",
       "provider": "google",
       "capabilities": ["review"],
       "cost_tier": "medium",
-      "avg_response_time_sec": 18
+      "avg_response_time_sec": 18,
+      "auth_required": "api_key"
     }
   ],
-  "last_updated": "2026-03-20T00:00:00Z"
+  "last_updated": "2026-03-20T10:00:00Z"
 }

@@ -19,7 +19,6 @@ description: "Automated development workflow orchestrator. Runs spec → plan �
 | `project.plans_dir` | `"docs/plans"` | Where to write implementation plans |
 | `project.test_command` | `"npm test"` | Command to run tests |
 | `notifications.email` | `null` | Email for notifications (null = disabled) |
-| `notifications.smtp_host` | `"smtp.gmail.com"` | SMTP server |
 
 ### Language Rule
 
@@ -27,8 +26,6 @@ Read `project.language` from config:
 - If `"vi"` → All output in Vietnamese (except code, commit prefix, branch name, file path)
 - If `"en"` → All output in English (default)
 - If other → Use that language for all output
-
-**The language setting applies to:** spec/plan content, PR title/body, review comments, log messages, email, escalation messages.
 
 **Always keep English for:** code, variable/function names, commit prefix (`feat:`, `fix:`), branch names (`workflow/<slug>`), file paths.
 
@@ -53,6 +50,7 @@ Khi user gọi `/autodev "yêu cầu"`, bạn bắt đầu pipeline từ đầu 
 | `wf_001` | Toàn bộ workflow | `/autodev-status wf_001` |
 | `wf_001:task_01` | Task cụ thể trong workflow | `/autodev-retry wf_001:task_01` |
 | _(không argument)_ | Tất cả workflows đang active | `/autodev-status` |
+
 
 ---
 
@@ -105,10 +103,10 @@ Groups chạy TUẦN TỰ. Tasks TRONG group chạy SONG SONG.
 
 | Pha | States | Teammate | Output | Max Loops |
 |-----|--------|----------|--------|-----------|
-| 1. Spec | `spec_writing` → `spec_review` | `spec-writer` → `spec-reviewer` | `{specs_dir}/*.md` | 3 |
-| 2. Plan | `plan_writing` → `plan_review` | `plan-writer` → `plan-reviewer` | `{plans_dir}/*.md` | 3 |
-| 3. Implement | `implementing` → `code_review` | `implementer` → `code-reviewer` | Code trên feature branch | 3 |
-| 4. PR | `pr_created` → `pr_review` | orchestrator → `code-reviewer` | GitHub PR + reviews | 5 |
+| 1. Spec | `spec_writing` → `spec_review` | `author` → `reviewer` | `{specs_dir}/*.md` + review files | 3 |
+| 2. Plan | `plan_writing` → `plan_review` | `author` → `reviewer` | `{plans_dir}/*.md` + review files | 3 |
+| 3. Implement | `implementing` → `code_review` | `author` → `reviewer` | Code trên feature branch + review files | 3 |
+| 4. PR | `pr_created` → `pr_review` | orchestrator → `reviewer` | GitHub PR + reviews | 5 |
 | 5. Done | `completed` | orchestrator | Summary comment | — |
 
 ### Bảng Chuyển Trạng Thái
@@ -122,6 +120,7 @@ spec_review → failed                      (loop >= max_spec_review_loops)
 plan_writing → plan_review                (plan-writer hoàn thành)
 plan_review → plan_writing                (reviewer trả "issues", loop < max)
 plan_review → implementing                (reviewer trả "approved")
+plan_review → split                       (reviewer trả "approved" + plan có N sections độc lập → tách sub-tasks)
 plan_review → failed                      (loop >= max_plan_review_loops)
 implementing → code_review                (implementer hoàn thành + tests pass)
 code_review → implementing                (reviewer trả REQUEST_CHANGES, loop < max)
@@ -236,6 +235,14 @@ Khi nhận yêu cầu từ user:
 5. **Tạo branch names** — Format: `workflow/<slug>` (VD: `workflow/rate-limiting`)
 6. **Gán `depends_on`** — Nếu task B phụ thuộc task A, ghi `"depends_on": ["task_01"]`
 7. **Đánh dấu `blocked`** — Tasks có depends_on chưa completed → status `blocked`
+8. **Sub-task splitting (optional)** — Sau plan_review approved:
+   a. Đọc plan file — nếu plan có N packages/sections độc lập (files_touched không overlap)
+   b. Tách thành N sub-tasks, gán cùng parallel group
+   c. Mỗi sub-task reference cùng spec + plan, chỉ implement phần mình
+   d. State: parent task status = `"split"`, tạo sub-tasks mới trong `tasks[]`
+   e. Sub-task IDs: `{task_id}_sub_01`, `{task_id}_sub_02`...
+   f. Sub-tasks bắt đầu từ phase `implementing` (skip spec/plan vì đã có)
+   g. Mỗi sub-task có `parent_task_id` trỏ về parent, parent có `sub_tasks[]` liệt kê IDs
 
 ### Parallel Group Assignment Algorithm
 
@@ -339,9 +346,11 @@ Output: parallel_groups[]
       "title": "string",
       "branch": "workflow/slug",
       "pr_number": null,        // null | number
-      "status": "pending|spec_writing|spec_review|plan_writing|plan_review|implementing|code_review|pr_created|pr_review|completed|failed|cancelled|blocked",
+      "status": "pending|spec_writing|spec_review|plan_writing|plan_review|implementing|code_review|pr_created|pr_review|completed|failed|cancelled|blocked|split",
       "phase_loop_count": 0,
       "depends_on": [],
+      "parent_task_id": null,        // OPTIONAL — cho sub-tasks, trỏ về parent task_id
+      "sub_tasks": [],               // OPTIONAL — cho parent task khi split, liệt kê sub-task IDs
       "parallel_group": 1,             // v2: group này thuộc về
       "files_touched": [],             // v2: files task sẽ sửa
       "agent_model": null,             // v2: model đang xử lý task
@@ -465,11 +474,28 @@ mkdir -p .workflow/{wf_id}
 ```
 
 ### Ghi state file
-**LUÔN backup trước khi ghi:**
-1. Đọc `.workflow/{wf_id}/state.json` hiện tại bằng Read tool
-2. Ghi nội dung cũ vào `.workflow/{wf_id}/state.backup.json` bằng Write tool
-3. Ghi state mới vào `.workflow/{wf_id}/state.json` bằng Write tool (JSON.stringify với 2-space indent)
-4. **Cập nhật registry** sau mỗi lần ghi state (Section 4)
+**LUÔN dùng Bash tool** (không dùng Write/Edit — tránh hiện diff dài trên CLI):
+
+```bash
+# Backup + ghi state trong 1 lệnh
+cp .workflow/{wf_id}/state.json .workflow/{wf_id}/state.backup.json 2>/dev/null; node -e "
+const s = {JSON_OBJECT};
+require('fs').writeFileSync('.workflow/{wf_id}/state.json', JSON.stringify(s, null, 2));
+console.log('State updated');
+"
+```
+
+**Tương tự cho registry:**
+```bash
+node -e "
+const r = {REGISTRY_OBJECT};
+require('fs').writeFileSync('.workflow/registry.json', JSON.stringify(r, null, 2));
+console.log('Registry updated');
+"
+```
+
+**Quy tắc:** Tất cả ghi state/registry PHẢI dùng Bash + `node -e` — không dùng Write/Edit tool.
+Cập nhật registry sau mỗi lần ghi state (Section 4).
 
 ### Đọc state file
 1. Dùng Read tool đọc `.workflow/{wf_id}/state.json`
@@ -507,189 +533,149 @@ Van TRACK `tokens_used` va `dispatches[]` ngay ca khi limit = null.
 
 ## 8. Teammate Prompt Templates
 
-### 8.1 spec-writer
-
-**Isolation:** `worktree` | **Mode:** `bypassPermissions`
-**Tools:** Read, Write, Edit, Grep, Glob
-```
-You are a spec writer for {project.name}.
-
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
-
-## Task
-Write a technical design spec for: "{task.title}"
-
-## Original user request
-{original_request}
-
-## Context
-- Read existing specs in {specs_dir}/ to match the project's style
-- Pattern: {specs_dir}/YYYY-MM-DD-<topic>-design.md
-- Explore the codebase to understand related code (use Grep/Glob)
-- If the project has a code intelligence tool (gitnexus, etc.), use it for impact analysis
-
-## Reviewer feedback (if any)
-{reviewer_feedback or "First draft — no feedback yet"}
-
-## Output
-- Write spec to: {specs_dir}/{date}-{slug}-design.md
-- Commit with message: "docs: add {slug} design spec"
-- Return the file path when done
-```
-
-### 8.2 spec-reviewer
-
-**Isolation:** none (foreground) | **Mode:** `bypassPermissions`
-**Tools:** Read, Grep, Glob
-
-```
-You are a spec reviewer for {project.name}.
-
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
-
-## Task
-Review technical design spec at: {task.artifacts.spec}
-
-## Original user request
-{original_request}
-
-## Review criteria
-1. Does the spec have all required sections? (Overview, Architecture, API, Error handling, Testing)
-2. Are there any missing important edge cases?
-3. Does it conflict with the current architecture? (explore codebase to verify)
-4. Is it clear, specific, and implementable?
-
-## Output
-Return EXACTLY ONE of these formats:
-- "approved" — if the spec meets requirements
-- "issues: [list of issues]" — if changes needed, each issue clear and actionable
-```
-
-### 8.3 plan-writer
-
-**Isolation:** `worktree` | **Mode:** `bypassPermissions`
-**Tools:** Read, Write, Edit, Grep, Glob
-
-```
-You are a plan writer for {project.name}.
-
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
-
-## Task
-Create an implementation plan based on the approved spec: {task.artifacts.spec}
-
-## Original user request
-{original_request}
-
-## Context
-- Read the approved spec to understand the design
-- Explore the codebase to find related code that needs modification
-- Pattern: {plans_dir}/YYYY-MM-DD-<topic>.md
-
-## Reviewer feedback (if any)
-{reviewer_feedback or "First draft — no feedback yet"}
-
-## Output
-- Write plan to: {plans_dir}/{date}-{slug}.md
-- Plan must include: files to modify, implementation order, test strategy, risk assessment
-- Commit with message: "docs: add {slug} implementation plan"
-- Return the file path when done
-```
-
-### 8.4 plan-reviewer
-
-**Isolation:** none (foreground) | **Mode:** `bypassPermissions`
-**Tools:** Read, Grep, Glob
-
-```
-You are a plan reviewer for {project.name}.
-
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
-
-## Task
-Review implementation plan at: {task.artifacts.plan}
-Based on approved spec: {task.artifacts.spec}
-
-## Review criteria
-1. Does the plan cover all requirements from the spec?
-2. Is the implementation order logical?
-3. Are there missing important test cases?
-4. Are all affected files identified?
-5. Is the plan feasible and clear enough to implement?
-
-## Output
-Return EXACTLY ONE of these formats:
-- "approved" — if the plan meets requirements
-- "issues: [list of issues]" — if changes needed, each issue clear and actionable
-```
-
-### 8.5 implementer
+### 8.1 unified-author
 
 **Isolation:** `worktree` | **Mode:** `bypassPermissions`
 **Tools:** Read, Write, Edit, Bash, Grep, Glob
 
+**Vai trò:** Author XUYÊN SUỐT tất cả phases (spec → plan → code) cho cùng 1 task. Được spawn 1 lần ở phase `spec_writing`, sau đó nhận SendMessage để chuyển phase. PHẢI nhớ decisions và rationale từ phases trước.
+
 ```
-You are an implementer for {project.name}.
+Bạn là author xuyên suốt cho task "{task.title}".
 
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
+IMPORTANT: Follow the output language setting from project config (reactions.yaml → project.language). Code, commit prefix, branch name, file path always in English.
 
-## Task
-Implement according to the approved plan: {task.artifacts.plan}
+## Vai trò
+Bạn viết TẤT CẢ phases: spec → plan → code.
+Bạn PHẢI nhớ decisions và rationale từ phases trước:
+- Khi viết plan: nhớ tại sao spec chọn approach này, trade-offs gì
+- Khi implement: nhớ plan rationale, reviewer đã challenge gì
 
-## Original user request
+## Phase hiện tại: {current_phase}
+## Decisions từ phases trước: (đọc lại spec/plan nếu cần)
+
+## Spec (nếu đã viết): {task.artifacts.spec}
+## Plan (nếu đã viết): {task.artifacts.plan}
+## Review history: {docs_dir}/reviews/{wf_id}/{task_id}/
+
+## Yêu cầu gốc
 {original_request}
 
-## Context
-- Read the plan to understand implementation order and files to modify
-- Read the spec at {task.artifacts.spec} for detailed design
-- Explore existing code before modifying (use Grep/Glob)
+## Feedback từ reviewer (nếu có)
+{reviewer_feedback hoặc "Bản nháp đầu tiên — chưa có feedback"}
 
-## TDD Process
-1. Write tests first (or alongside code)
-2. Implement code per plan
-3. Run tests: `{project.test_command}` (default: `npm test`)
-4. Fix until tests pass
-5. Commit with appropriate message (feat:, fix:, refactor:...)
+## Bối cảnh
 
-## Code reviewer feedback (if any)
-{reviewer_feedback or "First implementation — no feedback yet"}
+- Explore the codebase to understand related code (use Grep/Glob)
+- Assess the blast radius of changes
 
-## Output
-- Commit all changes
-- Ensure tests pass
-- Return summary of changes when done
+## Phase-specific instructions
+
+### Khi SPEC (spec_writing):
+- Pattern specs: {specs_dir}/YYYY-MM-DD-<topic>-design.md
+- Đọc specs hiện có để tham khảo style
+- Output: {specs_dir}/{date}-{slug}-design.md
+- Commit: "docs: add {slug} design spec"
+- Bạn PHẢI ghi section ## Decisions ở cuối spec (xem format bên dưới)
+
+### Khi PLAN (plan_writing):
+- Đọc spec đã approved tại {task.artifacts.spec}
+- Pattern plans: {plans_dir}/YYYY-MM-DD-<topic>.md
+- Plan phải bao gồm: files cần sửa, thứ tự implement, test strategy, risk assessment
+- Output: {plans_dir}/{date}-{slug}.md
+- Commit: "docs: add {slug} implementation plan"
+- Bạn PHẢI ghi section ## Decisions ở cuối plan (xem format bên dưới)
+
+### Khi IMPLEMENT (implementing):
+- Đọc plan tại {task.artifacts.plan} và spec tại {task.artifacts.spec}
+- Explore existing code before modifying
+- Assess impact before modifying any symbol
+- Quy trình TDD: viết tests → implement → chạy tests → fix
+- Commit với message phù hợp (feat:, fix:, refactor:...)
+
+## Decision Log — BẮT BUỘC
+
+Bạn PHẢI ghi section ## Decisions ở cuối spec và plan. Đây là context quan trọng cho plan-writing, implementing, và recovery.
+
+Format:
+| # | Quyết định | Alternatives đã xét | Lý do chọn |
+|---|-----------|---------------------|-------------|
+| 1 | ... | ... | ... |
 ```
 
-### 8.6 code-reviewer
+### 8.2 unified-reviewer
 
-**Isolation:** none (foreground) | **Mode:** `bypassPermissions`
-**Tools:** Read, Grep, Glob, Bash (only for `gh` commands)
+**Isolation:** không (foreground) | **Mode:** `bypassPermissions`
+**Tools:** Read, Grep, Glob, Bash (chỉ cho `gh` commands)
+
+**Vai trò:** Reviewer XUYÊN SUỐT tất cả phases (spec → plan → code → PR) cho cùng 1 task. Được spawn 1 lần ở phase `spec_review`, sau đó nhận SendMessage để chuyển phase. PHẢI nhớ và cross-reference feedback từ phases trước.
 
 ```
-You are a code reviewer for {project.name}.
+Bạn là unified reviewer cho this project.
 
-IMPORTANT: Follow the output language setting from project config. Code, commit prefix, branch name, file path always in English.
+IMPORTANT: Follow the output language setting from project config (reactions.yaml → project.language). Code, commit prefix, branch name, file path always in English.
 
-## Task
-Review code for PR #{task.pr_number} on branch {task.branch}
+## Vai trò
+Bạn review XUYÊN SUỐT toàn bộ lifecycle của task — từ spec → plan → code → PR.
+Bạn PHẢI nhớ feedback đã cho ở phases trước và cross-reference khi review phase sau.
 
-## Context
+## Phase hiện tại: {current_phase}
+## Artifact cần review: {artifact_path}
+
+## Yêu cầu gốc từ user
+{original_request}
+
+## Bối cảnh artifacts
 - Spec: {task.artifacts.spec}
 - Plan: {task.artifacts.plan}
-- Check that changes align with the spec and plan
+- PR: #{task.pr_number} trên branch {task.branch}
+- Review history: {docs_dir}/reviews/{wf_id}/{task_id}/
+  (Đọc lại review files nếu cần khôi phục context từ phases trước)
 
-## Review criteria
-1. Does the code follow the plan?
-2. Are tests complete and passing?
-3. Any security issues?
-4. Any performance concerns?
-5. Is code style consistent with the codebase?
+## Tiêu chí đánh giá theo phase
+
+### Khi review SPEC (spec_review):
+1. Spec có đầy đủ các section cần thiết không? (Overview, Architecture, API, Error handling, Testing)
+2. Có thiếu edge case nào quan trọng không?
+3. Có mâu thuẫn với architecture hiện tại không? (explore codebase to verify)
+4. Có rõ ràng, cụ thể, có thể implement được không?
+
+### Khi review PLAN (plan_review):
+1. Plan có cover hết các requirement trong spec không? (cross-reference spec đã review)
+2. Thứ tự implement có hợp lý không?
+3. Có thiếu test cases quan trọng không?
+4. Are all affected files identified?
+5. Plan có khả thi và rõ ràng để implement không?
+6. **Cross-check:** Feedback bạn đã cho ở spec phase có được address trong plan không?
+
+### Khi review CODE (code_review):
+1. Code có đúng theo plan không? (cross-reference plan đã review)
+2. Plan có đúng theo spec không? (cross-reference spec đã review)
+3. Tests có đầy đủ và pass không?
+4. Có security issues không?
+5. Có performance concerns không?
+6. Code style có consistent với codebase không?
+7. Blast radius có hợp lý không?
+8. **Cross-check:** Các issues bạn raise ở spec/plan phase đã được resolve trong code chưa?
+
+### Khi review PR (pr_review):
+- Post review bằng gh command:
+  - `gh pr review {pr_number} --approve --body "..."` — nếu code OK
+  - `gh pr review {pr_number} --request-changes --body "..."` — nếu cần fix
 
 ## Output
-Post review via gh command:
-- `gh pr review {pr_number} --approve --body "..."` — if code is OK
-- `gh pr review {pr_number} --request-changes --body "..."` — if fixes needed, list each issue specifically
+Trả về ĐÚNG MỘT trong hai format:
+- "approved" — nếu artifact đạt yêu cầu
+- "issues: [danh sách vấn đề]" — nếu cần sửa, mỗi issue rõ ràng và actionable
 ```
+
+### 8.3 _(đã gộp vào 8.1 unified-author)_
+
+### 8.4 _(đã gộp vào 8.2 unified-reviewer)_
+
+### 8.5 _(đã gộp vào 8.1 unified-author)_
+
+### 8.6 _(đã gộp vào 8.2 unified-reviewer)_
 
 ---
 
@@ -727,23 +713,180 @@ Trước mỗi lần dispatch teammate:
 6. Khi teammate hoàn thành: active_agents -= 1
 ```
 
-### 9.2 Worktree teammates (spec-writer, plan-writer, implementer)
+### 9.2 Teammate Lifecycle — Spawn, Message, Reuse
 
-Dispatch bằng SendMessage tool:
-- `teammate`: tên teammate (VD: `spec-writer`)
-- `isolation`: `"worktree"`
-- `mode`: `"bypassPermissions"`
-- `prompt`: template từ Section 8, thay thế placeholders bằng giá trị thực
+**Khác biệt Subagent vs Teammate:**
 
-### 9.3 Foreground teammates (spec-reviewer, plan-reviewer, code-reviewer)
+| | Subagent (cũ) | Teammate (v2) |
+|---|---|---|
+| Spawn | `Agent(prompt)` — one-shot, huỷ sau khi done | `Agent(prompt, name)` — named, giữ context |
+| Follow-up | Không thể — phải spawn mới | `SendMessage(to=name)` — gửi thêm instructions |
+| Review loop | Spawn agent mới mỗi vòng | SendMessage feedback → agent sửa trên context cũ |
+| Song song | Nhiều Agent calls | Nhiều named agents, coordinate qua SendMessage |
+| Context | Mất sau mỗi dispatch | Giữ nguyên — agent nhớ artifacts, feedback trước đó |
 
-Dispatch bằng SendMessage tool:
-- `teammate`: tên teammate (VD: `spec-reviewer`)
-- Không có isolation (chạy foreground)
-- `mode`: `"bypassPermissions"`
-- `prompt`: template từ Section 8, thay thế placeholders bằng giá trị thực
+**Quy tắc đặt tên teammate:**
+```
+Author (unified): author-{wf_id}-{task_id}
+VD: author-wf_001-task_01
+    (1 author duy nhất cho toàn bộ lifecycle: spec → plan → code)
+    Spawn lần đầu ở spec_writing, SendMessage cho plan_writing và implementing
 
-### 9.4 Placeholder Substitution
+Reviewer (unified): reviewer-{wf_id}-{task_id}
+VD: reviewer-wf_001-task_01
+    (1 reviewer duy nhất cho toàn bộ lifecycle của task)
+
+→ 2 long-lived teammates per task thay vì 6 short-lived
+```
+
+### 9.3 Spawn Teammate — Lần Đầu Dispatch
+
+Khi task bắt đầu phase mới VÀ chưa có teammate cho role đó:
+
+**Author (unified) — Worktree isolation, spawn 1 lần ở spec_writing:**
+```
+Agent(
+  prompt: "{template 8.1 unified-author, current_phase=spec_writing}",
+  name: "author-{wf_id}-{task_id}",
+  isolation: "worktree",
+  mode: "bypassPermissions",
+  model: "{từ role_mapping hoặc smart selection}",
+  run_in_background: true    // cho parallel dispatch
+)
+```
+
+**Các phase sau (plan_writing, implementing) — SendMessage chuyển phase:**
+```
+SendMessage(
+  to: "author-{wf_id}-{task_id}",
+  message: "Phase mới: {phase}. Nhớ lại decisions từ phases trước.
+    Review history: {docs_dir}/reviews/{wf_id}/{task_id}/
+    Đọc lại review files nếu cần khôi phục context."
+)
+```
+
+**Reviewer (unified) — Foreground, spawn 1 lần ở spec_review:**
+```
+Agent(
+  prompt: "{template 8.2 unified-reviewer, current_phase=spec_review}",
+  name: "reviewer-{wf_id}-{task_id}",
+  mode: "bypassPermissions",
+  model: "{từ role_mapping hoặc cross-model selection}"
+)
+```
+
+**Các phase sau (plan_review, code_review, pr_review) — SendMessage chuyển phase:**
+```
+SendMessage(
+  to: "reviewer-{wf_id}-{task_id}",
+  message: "Phase mới: {phase}. Artifact: {path}. Nhớ lại feedback từ phases trước."
+)
+```
+
+Sau khi spawn → lưu `name` vào task state để tái sử dụng.
+
+### 9.4 SendMessage — Follow-up & Review Loop
+
+Khi teammate đã tồn tại (đã spawn trước đó), **KHÔNG spawn mới** — dùng SendMessage:
+
+**Review loop (reviewer tìm issues → author sửa):**
+```
+SendMessage(
+  to: "author-wf_001-task_01",
+  message: "Reviewer feedback (loop {N}/{max}):\n{issues}\n\nReview file: {docs_dir}/reviews/{wf_id}/{task_id}/{phase}-review-v{N}.md\nSửa và commit lại."
+)
+```
+
+**Code reviewer nhận PR update:**
+```
+SendMessage(
+  to: "code-reviewer-wf_001-task_01",
+  message: "Writer đã push fixes. Re-review branch {branch}."
+)
+```
+
+**Lợi ích:** Writer giữ context từ lần viết trước — biết artifact đã tạo, feedback đã nhận, không cần đọc lại từ đầu.
+
+### 9.5 Khi Nào Spawn Mới vs SendMessage
+
+```
+Cần dispatch teammate cho {role}/{wf_id}/{task_id}
+    |
+    +-- Role là reviewer?
+    |     |
+    |     +-- CÓ → Teammate name "reviewer-{wf_id}-{task_id}" đã spawn?
+    |     |         |
+    |     |         +-- CÓ → SendMessage(to="reviewer-{wf_id}-{task_id}",
+    |     |         |         message="Phase mới: {phase}. Artifact: {path}. Nhớ lại feedback từ phases trước.")
+    |     |         |
+    |     |         +-- KHÔNG → Agent(prompt=8.2 unified-reviewer, name="reviewer-{wf_id}-{task_id}", ...)
+    |     |                     (spawn lần đầu ở spec_review, lưu name vào state)
+    |     |
+    |     +-- KHÔNG (author) → Teammate name "author-{wf_id}-{task_id}" đã spawn?
+    |           |
+    |           +-- CÓ → SendMessage(to="author-{wf_id}-{task_id}",
+    |           |         message="Phase mới: {phase}. Review history: {docs_dir}/reviews/{wf_id}/{task_id}/")
+    |           |         (teammate giữ context, tiếp tục làm việc)
+    |           |
+    |           +-- KHÔNG → Agent(prompt=8.1 unified-author, name="author-{wf_id}-{task_id}", ...)
+    |                       (spawn teammate mới ở spec_writing, lưu name vào state)
+    |
+    +-- Teammate trả kết quả → orchestrator xử lý
+```
+
+**Lưu ý:**
+- Mỗi task có tối đa 3 teammates cùng lúc: 1 author (unified) + 1 reviewer (unified) + 1 escalation (v2.1)
+- Author được spawn 1 lần ở spec_writing, dùng lại xuyên suốt plan_writing → implementing
+- Reviewer được spawn 1 lần ở spec_review, dùng lại xuyên suốt plan_review → code_review → pr_review
+- Khi task completed → teammates tự huỷ (không cần cleanup)
+- Khi task retry → spawn teammates MỚI (context cũ có thể misleading)
+
+### 9.5.0 Graceful Context Recovery
+
+Khi teammate chết/không phản hồi hoặc cần retry:
+
+```
+Teammate chết/không phản hồi hoặc retry
+    |
+    +-- Kiểm tra artifact files trên disk
+    |     |
+    |     +-- CÓ files (spec/plan/review history tồn tại) →
+    |     |     Spawn teammate mới với recovery prompt:
+    |     |     "Bạn thay thế teammate trước. Đọc lại context:
+    |     |      - Spec: {task.artifacts.spec}
+    |     |      - Plan: {task.artifacts.plan}
+    |     |      - Review history: {docs_dir}/reviews/{wf_id}/{task_id}/
+    |     |      - Decision Log: đọc ## Decisions trong spec/plan
+    |     |      - Phase hiện tại: {phase}
+    |     |      - Tiếp tục từ đây."
+    |     |
+    |     +-- KHÔNG files → Spawn mới từ đầu phase (behavior cũ)
+```
+
+**Kiểm tra artifacts tồn tại:**
+1. Đọc `task.artifacts.spec` — file tồn tại?
+2. Đọc `task.artifacts.plan` — file tồn tại?
+3. Kiểm tra `{docs_dir}/reviews/{wf_id}/{task_id}/` — có review files?
+4. Nếu BẤT KỲ file nào tồn tại → dùng recovery prompt
+5. Nếu KHÔNG file nào → spawn từ đầu phase
+
+**Recovery prompt bổ sung vào unified-author (8.1) và unified-reviewer (8.2):**
+Template đã bao gồm các paths cần thiết. Teammate mới chỉ cần Read files để khôi phục context.
+
+### 9.5.1 Pause Check Trước Mỗi Dispatch
+
+**TRƯỚC MỖI dispatch** (spawn hoặc SendMessage), orchestrator PHẢI:
+
+```
+1. Đọc state file → kiểm tra workflow.status
+2. Nếu status == "paused" → DỪNG NGAY, không dispatch
+   → Output: 🟡 ▸ [{HH:MM:SS}] Workflow paused — dừng tại {phase}
+3. Nếu status == "running" → tiếp tục dispatch
+```
+
+**Giới hạn:** Không thể dừng teammate ĐANG chạy giữa chừng. `/stop-autodev` đánh dấu `paused` và workflow dừng **sau khi phase hiện tại hoàn thành**.
+
+### 9.6 Placeholder Substitution
 
 Trước khi dispatch, thay thế tất cả placeholders trong prompt template:
 - `{task.title}` → title từ state file
@@ -759,9 +902,15 @@ Trước khi dispatch, thay thế tất cả placeholders trong prompt template:
 - `{writer_model}` → model ID cua writer (VD: "claude-opus-4") (v2.1)
 - `{cross_model_enabled}` → "true" hoac "false" (v2.1)
 
-### 9.5 Cross-Model Reviewer Selection (v2.1)
+### 9.7 Cross-Model Reviewer Selection (v2.1)
 
 Khi cross-model enabled, thay the reviewer selection logic:
+
+**Reviewer model chon 1 lan khi spawn, giu xuyen suot:**
+- Model reviewer duoc chon khi spawn `reviewer-{wf_id}-{task_id}` lan dau (tai spec_review)
+- Model nay GIU NGUYEN cho tat ca phases sau (plan_review, code_review, pr_review)
+- Neu muon doi model → phai spawn reviewer MOI (mat context tu phases truoc)
+- **Recommend:** Chon model manh nhat cho reviewer vi no review xuyen suot
 
 **Model Resolution Order:**
 1. **Explicit config** — `cross_model.review_pairs.<phase>.reviewer` trong `reactions.yaml`
@@ -778,19 +927,15 @@ Khi cross-model enabled, thay the reviewer selection logic:
 
 **Cap nhat state khi dispatch:** Ghi `cross_model` object vao task (xem Section 6 schema).
 
-### 9.6 Pluggable Agent — Formal Role Mapping (v2)
+### 9.8 Pluggable Agent — Formal Role Mapping (v2)
 
 Đọc `agents.role_mapping` từ `.workflow/reactions.yaml`:
 
 ```yaml
 agents:
   role_mapping:
-    spec-writer: claude-opus-4
-    spec-reviewer: gpt-4o
-    plan-writer: claude-opus-4
-    plan-reviewer: gpt-4o
-    implementer: claude-opus-4
-    code-reviewer: gpt-4o
+    author: claude-opus-4       # unified author — 1 model xuyên suốt spec/plan/code
+    reviewer: gpt-4o            # unified reviewer — 1 model xuyên suốt spec/plan/code/PR review
     escalation: gemini-2.5-pro
 ```
 
@@ -806,10 +951,45 @@ Nếu không có `reactions.yaml` hoặc không có `role_mapping` → dùng mod
 
 ## 10. Review Loop Logic — Vòng Lặp Đánh Giá
 
-Sau mỗi pha "write", dispatch reviewer tương ứng:
+### 10.0 Review Artifacts On Disk
+
+Sau **MỖI review round**, orchestrator PHẢI ghi review output ra file trên disk:
 
 ```
-spec_writing hoàn thành → dispatch spec-reviewer
+{docs_dir}/reviews/{wf_id}/
+├── {task_id}/
+│   ├── spec-review-v1.md        ← issues lần 1
+│   ├── spec-review-v2.md        ← approved
+│   ├── plan-review-v1.md
+│   ├── plan-review-v2.md
+│   ├── code-review-v1.md
+│   └── code-review-v2.md
+```
+
+**Quy tắc ghi file:**
+- File name: `{phase}-review-v{loop_count}.md` (VD: `spec-review-v1.md`)
+- Nội dung: toàn bộ output của reviewer (issues hoặc approved)
+- Ghi bằng Bash tool: `mkdir -p {docs_dir}/reviews/{wf_id}/{task_id} && node -e "..."`
+- Khi reviewer trả "approved" → ghi file cuối cùng với nội dung "APPROVED" + summary
+
+**Khi SendMessage chuyển phase**, LUÔN kèm path đến review files trước đó:
+```
+SendMessage(
+  to: "reviewer-{wf_id}-{task_id}",
+  message: "Phase mới: {phase}. Artifact: {path}.
+    Review history: {docs_dir}/reviews/{wf_id}/{task_id}/
+    Nhớ lại feedback từ phases trước. Nếu context bị mất, đọc lại review files."
+)
+```
+
+**Mục đích:** Dù compaction xóa conversation history, reviewer/author có thể Read file để khôi phục context.
+
+---
+
+Sau mỗi pha "write", dispatch unified reviewer (cùng 1 reviewer cho tất cả phases):
+
+```
+spec_writing hoàn thành → spawn reviewer-{wf_id}-{task_id} (lần đầu)
   ├── Kết quả "approved"
   │     → Cập nhật status → plan_writing
   │     → Lưu checkpoint
@@ -822,9 +1002,19 @@ spec_writing hoàn thành → dispatch spec-reviewer
         │   ├── CÓ → Escalate: pause workflow, thông báo user
         │   └── KHÔNG → Dispatch lại writer với reviewer feedback
         → Lưu checkpoint
+
+plan_writing hoàn thành → SendMessage đến reviewer-{wf_id}-{task_id}
+  (reviewer nhớ context spec review, cross-reference spec khi review plan)
+  ├── "approved" → implementing
+  └── "issues" → loop tương tự
+
+implementing hoàn thành → SendMessage đến reviewer-{wf_id}-{task_id}
+  (reviewer nhớ context spec + plan review, cross-reference khi review code)
+  ├── "approved" → pr_created
+  └── "issues" → loop tương tự
 ```
 
-**Áp dụng tương tự cho:** plan_writing/plan_review, implementing/code_review
+**Reviewer giữ context xuyên suốt:** Không cần truyền lại spec/plan path — reviewer đã đọc từ phases trước.
 
 ### Timer Tracking trong Review Loop (v2)
 
@@ -973,9 +1163,15 @@ Orchestrator tự xử lý PR (không qua teammate):
 ### Bước 1: Push & Tạo PR
 ```bash
 git push -u origin workflow/{slug}
-gh pr create --title "{task.title}" --body "{progress_table}"
+gh pr create --title "{task.title}" --body "{progress_table}
+
+## Review History
+- Review files: {docs_dir}/reviews/{wf_id}/{task_id}/
+- Spec: {task.artifacts.spec}
+- Plan: {task.artifacts.plan}
+"
 ```
-Lưu `pr_number` vào state file.
+Lưu `pr_number` vào state file. PR body PHẢI link đến review files để human có visibility vào toàn bộ review history.
 
 ### Bước 2: Post Progress Comment (Layer 2)
 Tạo comment tiến độ trên PR, lưu comment ID để edit sau:
@@ -992,7 +1188,7 @@ _Cập nhật lần cuối: {timestamp}_"
 ```
 
 ### Bước 3: AI Self-Review
-Dispatch `code-reviewer` để review PR.
+SendMessage đến `reviewer-{wf_id}-{task_id}` (unified reviewer) để review PR.
 
 - Nếu `REQUEST_CHANGES` → dispatch `implementer` để fix → re-review (max 3 loops)
 - Nếu `APPROVE` → chuyển sang polling
@@ -1016,42 +1212,22 @@ gh pr view {pr_number} --json comments,reviews
 
 ---
 
-## 13. Email Notification
+## 13. Email Notification — Thông Báo Email
 
-**Skip entirely if `notifications.email` is null in config.** Email is optional — never block the workflow.
+**BẮT BUỘC:** Orchestrator PHẢI gửi email tại mỗi sự kiện bên dưới bằng cách chạy Bash tool. Không skip.
 
-Send email at important events using `node -e` inline:
-
-Read SMTP settings from `notifications` section in `.workflow/reactions.yaml`:
-- `smtp_host` (default: smtp.gmail.com)
-- `smtp_port` (default: 587)
-- `smtp_secure` (default: false — set true for port 465)
-- Credentials from env vars: `SMTP_USER`, `SMTP_PASS`
+**Cách gửi:** Copy-paste đoạn code dưới, thay `SUBJECT` và `BODY`:
 
 ```bash
-node --input-type=module -e "
-import { createTransport } from 'nodemailer';
-const transporter = createTransport({
-  host: process.env.SMTP_HOST || '{notifications.smtp_host}',
-  port: parseInt(process.env.SMTP_PORT || '{notifications.smtp_port}'),
-  secure: {notifications.smtp_secure},
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-});
-try {
-  await transporter.sendMail({
-    from: process.env.SMTP_USER,
-    to: '{notifications.email}',
-    subject: '${SUBJECT}',
-    text: '${BODY}'
-  });
-  console.log('Email sent');
-} catch (e) {
-  console.error('Email failed:', e.message);
-}
+node -e "
+const n = require('nodemailer');
+const t = n.createTransport({ host: process.env.SMTP_HOST, port: 587, secure: false, auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } });
+t.sendMail({ from: 'AutoDev <' + process.env.SMTP_USER + '>', to: '{notifications.email}', subject: 'SUBJECT', text: 'BODY' })
+  .then(() => console.log('Email sent')).catch(e => console.error('Email failed:', e.message));
 "
 ```
 
-### Các sự kiện trigger email
+### Các sự kiện trigger email — PHẢI gửi
 
 | Sự kiện | Subject | Body |
 |---------|---------|------|
@@ -1064,7 +1240,7 @@ try {
 | Budget exceeded | `[Autodev] Budget exceeded: {wf_id}/{slug} — paused` | Token usage, recovery options (v2.1) |
 | Paused (budget+timeout) | `[Autodev] Paused (budget + timeout): {wf_id}/{slug}` | Ca 2 reasons chi tiet (v2.1) |
 
-**Lưu ý:** Nếu SMTP không khả dụng, log warning và tiếp tục — email là nice-to-have, không block workflow.
+**Lưu ý:** Nếu email fail (SMTP lỗi), log `🟡 ▸ Email failed: {error}` rồi tiếp tục — không block workflow. Nhưng PHẢI thử gửi, không được skip.
 
 ---
 
@@ -1083,49 +1259,65 @@ Khi có nhiều workflows chạy đồng thời, dùng separator để phân bi�
 [15:30:50] v task_02/auth-refactor: spec đã viết xong
 ```
 
-### Format chuẩn cho mỗi dòng log
+### Color Dots
+
+| Dot | Ý nghĩa | Dùng khi |
+|-----|---------|---------|
+| 🔵 | Đang chạy / Active | Bắt đầu phase, dispatch teammate |
+| 🟢 | Thành công | Phase approved, task completed, workflow done |
+| 🟡 | Cảnh báo | Timeout warning, budget warning, escalation |
+| 🔴 | Thất bại | Phase failed, task failed, budget exceeded |
+| 🟣 | Hệ thống | Checkpoint, migration, reflect, cache, dashboard |
+| ⚪ | Chờ | Task pending, blocked |
+
+### Format chuẩn
 
 ```
-[HH:MM:SS] > task_id/slug: message          # Bắt đầu (start)
-[HH:MM:SS] v task_id/slug: message          # Thành công (success)
-[HH:MM:SS] x task_id/slug: message          # Thất bại (failure)
-[HH:MM:SS] # checkpoint message             # Checkpoint
+{dot} ▸ [{HH:MM:SS}] {wf_id}/{slug} {message}
 ```
 
 ### Ví dụ
 
 ```
-[15:30:02] > task_01/rate-limiting: spec_writing bắt đầu
-[15:30:45] v task_01/rate-limiting: spec đã viết xong
-[15:30:46] > task_01/rate-limiting: spec_review vòng 1
-[15:31:20] x task_01/rate-limiting: spec_review phát hiện 2 vấn đề
-[15:31:21] > task_01/rate-limiting: spec_writing (chỉnh sửa)
-[15:32:05] v task_01/rate-limiting: spec đã chỉnh sửa
-[15:32:06] > task_01/rate-limiting: spec_review vòng 2
-[15:32:30] v task_01/rate-limiting: spec APPROVED
-[15:32:31] # checkpoint cp_003 đã lưu
+── wf_001/rate-limiting ──────────────────
+🔵 ▸ [15:30:02] wf_001/rate-limiting spec_writing bắt đầu
+🟢 ▸ [15:30:45] wf_001/rate-limiting spec viết xong
+🔵 ▸ [15:30:46] wf_001/rate-limiting spec_review loop 1
+🔴 ▸ [15:31:20] wf_001/rate-limiting spec_review: 2 vấn đề
+🔵 ▸ [15:31:21] wf_001/rate-limiting spec_writing sửa lại
+🟢 ▸ [15:32:30] wf_001/rate-limiting spec APPROVED
+🟣 ▸ [15:32:31] wf_001 checkpoint cp_003
+```
+
+### Cross-Model Logging (v2.1)
+
+```
+🔵 ▸ [HH:MM:SS] wf_id/slug cross-model review: writer=opus, reviewer=gpt-4o
+🟡 ▸ [HH:MM:SS] wf_id/slug ESCALATION: reviewer nhẹ approve task phức tạp → dispatch gemini
+🟢 ▸ [HH:MM:SS] wf_id/slug escalation APPROVED — advance phase
+🟡 ▸ [HH:MM:SS] wf_id/slug CONSENSUS PAUSED — 3 models bất đồng
 ```
 
 ### Budget Logging (v2.1)
 
 ```
-[HH:MM:SS] ! wf_id/slug BUDGET WARN: tokens_used/tokens_limit (pct%)
+🟡 ▸ [HH:MM:SS] wf_id/slug BUDGET WARN: {used}/{limit} ({pct}%)
     → Model downgraded to haiku
 
-[HH:MM:SS] x wf_id/slug BUDGET EXCEEDED: tokens_used/tokens_limit
+🔴 ▸ [HH:MM:SS] wf_id/slug BUDGET EXCEEDED: {used}/{limit}
     → Task paused. /autodev-retry --budget +50% | /resume-autodev --budget unlimited
 
-[HH:MM:SS] x wf_id WORKFLOW BUDGET EXCEEDED: tokens_used/tokens_limit
+🔴 ▸ [HH:MM:SS] wf_id WORKFLOW BUDGET EXCEEDED: {used}/{limit}
     → Workflow paused. /resume-autodev --budget +50% | --budget unlimited
 ```
 
 ### Cache Logging (v2.1)
 
 ```
-[HH:MM:SS] * task_id/slug: spec cache HIT (hash: prefix, saved ~Nm)
-[HH:MM:SS] * task_id/slug: plan cache MISS — dispatching plan-writer
-[HH:MM:SS] + task_id/slug: cached spec (hash: prefix, ttl: Nd)
-[HH:MM:SS] ~ cache invalidation: N entries invalidated (reason: git_change)
+🟣 ▸ [HH:MM:SS] wf_id/slug CACHE HIT: spec (hash: {prefix}, saved ~{N}m)
+🔵 ▸ [HH:MM:SS] wf_id/slug CACHE MISS: plan — dispatching plan-writer
+🟣 ▸ [HH:MM:SS] wf_id/slug cached spec (hash: {prefix}, ttl: {N}d)
+🟣 ▸ [HH:MM:SS] cache invalidation: {N} entries (reason: git_change)
 ```
 
 **Ghi log bằng cách output trực tiếp trong conversation** — user thấy real-time.
@@ -1175,7 +1367,7 @@ Khi có nhiều workflows chạy đồng thời, dùng separator để phân bi�
 | Teammate crash | Implementer fail giữa chừng | Retry 1 lần cùng prompt | Đánh dấu task `failed`, thông báo user |
 | Review deadlock | Reviewer liên tục tìm issues > max loops | — | Pause + escalate với tóm tắt issues chưa resolve |
 | Git conflict | Rebase fail trên task branch | Tự `git rebase main` | Pause, hiển thị conflict files |
-| Test failure | Tests fail after implement | Dispatch implementer with error output | Retry once with debug context. Then escalate |
+| Test failure | Tests fail sau khi implement | Dispatch implementer với error output | Retry once with debug context. Then escalate |
 | GitHub API failure | `gh pr create` fail | Retry 3 lần exponential backoff (5s, 15s, 45s) | Pause, log error |
 | State file corruption | JSON không hợp lệ | — | Fallback sang `state.backup.json` |
 | Budget exceeded (v2.1) | tokens_used >= limit | Pause task/workflow | User retry `--budget +50%`, `--budget unlimited`, hoac cancel |
@@ -1680,24 +1872,31 @@ PHA SPEC va PHA PLAN: Cache lookup truoc → HIT skip phases → MISS pipeline b
 Khi user gọi `/autodev "yêu cầu"`:
 
 ```
+⚠ QUY TẮC UX: Output log TRƯỚC MỖI bước — user phải biết đang làm gì, không được im lặng.
+
 1. V1 MIGRATION CHECK (Section 25)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Kiểm tra v1 migration...
    └── Detect .workflow/state.json (v1) → migrate nếu cần
 
 2. ĐỌC REGISTRY (Section 4)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Đọc registry...
    └── Tạo mới nếu chưa có
    └── Kiểm tra giới hạn concurrent workflows + agents
 
-3. ĐỌC CONFIG (Section 9.6)
+3. ĐỌC CONFIG (Section 9.8)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Đọc config (reactions, model-registry)...
    └── Load reactions.yaml → role_mapping, timeouts, budget, cache
    └── Load model-registry.json nếu cross-model enabled
 
 4. PHÂN TÁCH TASKS (Section 5)
+   → LOG: 🔵 ▸ [{HH:MM:SS}] Phân tích yêu cầu...
    └── Parse requirement → tasks
    └── Khai báo files_touched cho mỗi task
    └── Gán parallel groups
-   └── Hiển thị decomposition → chờ user xác nhận
+   → LOG: Hiển thị decomposition box → chờ user xác nhận
 
 5. TẠO STATE FILE (Section 6, 7)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Tạo workflow {wf_id}...
    └── mkdir -p .workflow/{wf_id}
    └── Ghi state.json với tasks ở status "pending"
    └── Cập nhật registry
@@ -1706,56 +1905,72 @@ Khi user gọi `/autodev "yêu cầu"`:
    └── Nếu user muốn → npx serve .workflow --cors
 
 7. GỬI EMAIL "Workflow bắt đầu" (Section 13)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Gửi email thông báo...
 
 8. CACHE INVALIDATION (Section 26.4)
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Kiểm tra cache...
    └── Kiểm tra git changes → invalidate stale entries
 
 9. CHO MỖI PARALLEL GROUP (tuần tự):
+   │
+   → LOG: 🔵 ▸ [{HH:MM:SS}] {wf_id} group {grp_id} bắt đầu ({N} tasks)
    │
    ├── 9a. Dispatch tasks trong group ĐỒNG THỜI (Section 11):
    │   │
    │   └── CHO MỖI TASK (parallel trong group):
    │       │
    │       ├── Tạo branch: git checkout -b workflow/{slug}
-   │       ├── LOG: [HH:MM:SS] > task_id/slug: bắt đầu
+   │       ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} bắt đầu
    │       ├── Cập nhật timers
    │       │
+   │       ├── ** KIỂM TRA paused** → nếu state=paused → DỪNG, không dispatch tiếp
+   │       │
    │       ├── PHA SPEC (Section 8.1, 8.2, 10):
-   │       │   ├── Cache lookup → HIT? skip : dispatch
-   │       │   ├── Dispatch spec-writer
-   │       │   ├── Dispatch spec-reviewer (cross-model nếu enabled)
-   │       │   ├── Loop nếu cần (max 3)
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} spec_writing — dispatching spec-writer...
+   │       │   ├── Cache lookup → HIT? 🟣 CACHE HIT, skip : dispatch
+   │       │   ├── Spawn/SendMessage spec-writer (Section 9.3/9.4)
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} spec_review — dispatching reviewer...
+   │       │   ├── Spawn/SendMessage spec-reviewer
+   │       │   ├── Loop nếu cần (max 3) — mỗi loop: 🔵 log trước dispatch
    │       │   ├── Budget check mỗi dispatch
    │       │   ├── Timeout check mỗi phase
    │       │   ├── Cache CREATE nếu approved
-   │       │   └── Checkpoint khi approved
+   │       │   ├── 🟢 ▸ [{HH:MM:SS}] {wf_id}/{slug} spec APPROVED
+   │       │   └── 🟣 checkpoint
    │       │
    │       ├── PHA PLAN (Section 8.3, 8.4, 10):
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} plan_writing — dispatching plan-writer...
    │       │   ├── Cache lookup → HIT? skip : dispatch
-   │       │   ├── Dispatch plan-writer
-   │       │   ├── Dispatch plan-reviewer
+   │       │   ├── Spawn/SendMessage plan-writer
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} plan_review — dispatching reviewer...
    │       │   ├── Loop nếu cần (max 3)
    │       │   ├── Budget check, timeout check
    │       │   ├── Cache CREATE nếu approved
-   │       │   └── Checkpoint khi approved
+   │       │   ├── 🟢 ▸ [{HH:MM:SS}] {wf_id}/{slug} plan APPROVED
+   │       │   └── 🟣 checkpoint
    │       │
    │       ├── PHA IMPLEMENT (Section 8.5, 8.6, 10):
-   │       │   ├── Dispatch implementer
-   │       │   ├── Dispatch code-reviewer
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} implementing — dispatching implementer...
+   │       │   ├── Spawn/SendMessage implementer
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} code_review — dispatching reviewer...
    │       │   ├── Loop nếu cần (max 3)
    │       │   ├── Budget check, timeout check
-   │       │   └── Checkpoint khi approved
+   │       │   ├── 🟢 ▸ [{HH:MM:SS}] {wf_id}/{slug} code review APPROVED
+   │       │   └── 🟣 checkpoint
    │       │
    │       ├── PHA PR (Section 12):
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} pushing + creating PR...
    │       │   ├── Push + tạo PR
-   │       │   ├── Post progress comment
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} PR #{N} — AI self-review...
    │       │   ├── AI self-review
+   │       │   ├── 🔵 ▸ [{HH:MM:SS}] {wf_id}/{slug} polling external comments...
    │       │   ├── Poll external comments
    │       │   └── Final summary khi xong
    │       │
-   │       └── LOG: [HH:MM:SS] v task_id/slug: HOÀN THÀNH
+   │       └── 🟢 ▸ [{HH:MM:SS}] {wf_id}/{slug} HOÀN THÀNH
    │
    ├── 9b. CHỜ tất cả tasks trong group → group completed
+   │   → LOG: 🟢 ▸ [{HH:MM:SS}] {wf_id} group {grp_id} hoàn thành
    └── 9c. Cập nhật registry + state
 
 10. REFLECT PHASE (Section 28)
