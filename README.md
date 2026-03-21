@@ -69,6 +69,9 @@ This creates:
 | `/autodev-retry wf_001:task_01` | Retry a failed task |
 | `/autodev-cancel` | Cancel all workflows |
 | `/autodev-cancel wf_001` | Cancel specific workflow |
+| `/autodev_auth codex login` | Login to OpenAI (PKCE + auto-fallback Device Code) |
+| `/autodev_auth codex status` | Show OAuth token status |
+| `/autodev_auth codex accounts` | List OAuth accounts |
 
 ## Configuration
 
@@ -145,9 +148,15 @@ Each phase has a configurable review loop (default max: 3 iterations).
     ├── state.json
     └── state.backup.json
 
+~/.config/autodev/oauth/      # OAuth tokens (user-level, shared across projects)
+├── accounts.json             # Account registry
+└── default.json              # Credentials for "default" account
+
 docs/specs/                   # Design specs (committed)
 docs/plans/                   # Implementation plans (committed)
 ```
+
+> **Windows:** OAuth tokens are stored in `%APPDATA%\autodev\oauth\`
 
 ## Update
 
@@ -172,7 +181,7 @@ Your `.workflow/reactions.yaml` config is **never overwritten** by updates — o
 - `gh` CLI (for PR creation/review)
 - Git
 - Node.js (for init script and hooks)
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (auto-set by plugin)
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`
 
 ## License
 
