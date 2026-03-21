@@ -1169,12 +1169,14 @@ CHO MỖI parallel group (tuần tự theo group_id):
     │   ├── Task B → worktree riêng → branch riêng
     │   └── Task C → worktree riêng → branch riêng
     │
-    ├── CHỜ tất cả tasks hoàn thành (hoặc fail)
-    │   ├── Nếu TẤT CẢ completed → group completed → tiếp group sau
-    │   ├── Nếu có task failed → quyết định:
-    │   │   ├── Task failed nhưng không block → tiếp tục tasks khác
-    │   │   └── Task failed và block group → pause group
-    │   └── Update registry active_agents sau mỗi task xong
+    ├── CHỜ notifications (không poll):
+    │   ├── Claude Code batch tất cả completed agent results vào 1 turn
+    │   ├── Thứ tự results = dispatch order, không phải completion order
+    │   ├── Xử lý từng result tuần tự:
+    │   │   ├── Task completed → cập nhật state, cherry-pick nếu cần
+    │   │   ├── Task failed → xử lý theo Section 16
+    │   │   └── Task cần next phase → dispatch tiếp (background)
+    │   └── Tất cả tasks trong group completed → group done → tiếp group sau
     │
     └── Group completed → tiếp parallel group tiếp theo
 ```
@@ -1269,6 +1271,33 @@ Trước khi dispatch parallel group:
     → Dispatch available_agents tasks trước
     → Khi task xong → dispatch task tiếp (backfill)
     → Log: "Đang chạy {N}/{total} tasks (giới hạn agent)"
+```
+
+### 11.5 Parallel Wait Mechanism
+
+Background agents hoàn thành → Claude Code runtime batch notifications vào turn tiếp theo của orchestrator.
+
+**Đặc điểm đã xác nhận:**
+- **Batching:** TẤT CẢ pending notifications gộp vào 1 message turn
+- **Thứ tự:** Theo dispatch order (tool_use_id), KHÔNG theo completion time
+- **Không drop:** Cả N results đều present, không race condition
+- **Model:** Event batching (giống React batched state updates)
+
+**Orchestrator KHÔNG poll — chỉ đợi notifications:**
+
+```
+Dispatch Task A (background) → dispatch Task B (background) → dispatch Task C (background)
+    ↓
+Orchestrator nhận 1 batched turn chứa results [A, B, C]
+    ↓
+Xử lý tuần tự theo dispatch order:
+    ├── Task A result → cập nhật state, chuyển phase tiếp
+    ├── Task B result → cập nhật state, chuyển phase tiếp
+    └── Task C result → cập nhật state, chuyển phase tiếp
+    ↓
+Tất cả tasks trong group đã xong phase hiện tại?
+    ├── CÓ → group phase completed, dispatch phase tiếp cho cả group
+    └── KHÔNG → dispatch phase tiếp cho tasks đã xong, chờ tasks còn lại
 ```
 
 ---
