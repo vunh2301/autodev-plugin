@@ -118,7 +118,7 @@ cross_model:
   enabled: false              # Bật để dùng model khác cho reviewer
   role_mapping:
     writer: "claude-opus-4"
-    reviewer: "gpt-4o"
+    reviewer: "gpt-5.4"
 
 # === Budget (tuỳ chọn) ===
 budget:

@@ -110,7 +110,7 @@ cross_model:
   enabled: true
   role_mapping:
     writer: "claude-opus-4"
-    reviewer: "gpt-4o"
+    reviewer: "gpt-5.4"
     escalation: "gemini-2.5-pro"
 ```
 
@@ -125,7 +125,7 @@ budget:
   warn_at_pct: 80
   # pricing:  # USD per 1M tokens — enables cost estimates in summary
   #   claude-opus-4:    { prompt: 15.00, completion: 75.00 }
-  #   gpt-4o:           { prompt: 2.50,  completion: 10.00 }
+  #   gpt-5.4:           { prompt: 2.50,  completion: 10.00 }
 ```
 
 ## Pipeline
