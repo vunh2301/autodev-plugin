@@ -104,6 +104,15 @@ cache:
     auto: true
     action: log
 
+# === Proxy Config (v2.4) ===
+# Auto-start Claude→OpenAI proxy on session startup
+# proxy:
+#   enabled: true                        # true = auto-start proxy khi Claude Code mo
+#   port: 4141                           # Port cho proxy server
+#   model: "gpt-5.4"                     # Target model (tat ca requests map ve model nay)
+#   # Nho them vao .claude/settings.json:
+#   #   { "env": { "ANTHROPIC_BASE_URL": "http://localhost:4141", "ANTHROPIC_API_KEY": "proxy" } }
+
 # === OAuth Config (v2.1) ===
 oauth:
   openai:

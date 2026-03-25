@@ -1,7 +1,7 @@
 {
   "name": "autodev",
   "description": "Automated development workflow orchestrator. Runs spec → plan → implement → PR → review pipeline with parallel task execution, cross-model review, budget tracking, and incremental caching.",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "author": {
     "name": "Justin Vu",
     "email": "vunh2301@gmail.com"
