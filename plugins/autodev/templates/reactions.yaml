@@ -1,121 +1,41 @@
-# .workflow/reactions.yaml — Workflow Configuration
-# Config file cho autodev orchestrator. Nằm trong .gitignore.
+# =============================================================================
+# .workflow/reactions.yaml — Autodev Configuration
+# =============================================================================
+# This file configures the autodev workflow orchestrator.
+# Located in .workflow/ (gitignored). Created by: /autodev init
+# =============================================================================
 
-# === Reactions ===
-reactions:
-  ci-failed:
-    auto: true
-    action: send-to-agent
-    retries: 2
+# --- Project Settings ---
+project:
+  name: "my-project"              # Project name (used in logs, emails, PR titles)
+  language: "en"                  # Output language: "en", "vi", "ja", "zh", etc.
+  specs_dir: "docs/specs"         # Where design specs are saved
+  plans_dir: "docs/plans"         # Where implementation plans are saved
+  test_command: "npm test"        # Command to run tests after implementation
 
-# === Agents ===
-agents:
-  default: claude
-  role_mapping:
-    spec-writer: default
-    spec-reviewer: claude-haiku
-    implementer: default
-    code-reviewer: default
-    reflect: claude-haiku
+# --- Notifications (optional) ---
+notifications:
+  email: null                     # Set email address to receive notifications (null = disabled)
 
-# === Cross-Model Review (v2.1) ===
-cross_model:
-  enabled: true
-  enforce: false                      # true = bat buoc cross-model, false = best-effort
-
-  role_mapping:
-    writer: "claude-opus-4"
-    reviewer: "gpt-5.4"
-    escalation: "gemini-2.5-pro"
-
-  review_pairs:                       # OPTIONAL — khi thieu, dung role_mapping / auto-pairing
-    spec_review:
-      writer: "claude-opus-4"
-      reviewer: "gpt-5.4"
-    plan_review:
-      writer: "claude-opus-4"
-      reviewer: "gpt-5.4"
-    code_review:
-      writer: "claude-opus-4"
-      reviewer: "claude-sonnet-4"
-
-  escalation:
-    enabled: true
-    model: "gemini-2.5-pro"
-    trigger:
-      type: "disagreement"            # "disagreement" | "complexity" | "always" | "never"
-      phases: ["code_review"]         # Mac dinh chi code_review
-      complexity_threshold: 3         # So files thay doi de coi la "phuc tap"
-    phase_config:
-      spec_review: false
-      plan_review: false
-      code_review: true
-
-  consensus:                          # OPTIONAL — khi thieu, consensus DISABLED
-    enabled: false
-    min_approvals: 2
-    strategy: "reviewer_wins"
-    on_disagreement: "escalate"       # "escalate" | "reject" | "majority"
-
-  # === Dispatch Config (v2.1 Task 02) ===
-  dispatch:
-    mode: "auto"                      # "auto" | "agent_only" | "api_only"
-    api_timeout_sec: 120              # Timeout cho API call (giay)
-    api_max_retries: 1                # Max retries cho 5xx errors
-    temp_dir: ".workflow/tmp"         # Thu muc cho temp files
-    cleanup_temp: true                # Xoa temp files sau khi doc
-
-# === Budget Capping (v2.1) ===
+# --- Budget (optional) ---
+# Controls token usage limits. Remove section for unlimited.
 budget:
-  task_budget_tokens: 50000           # Max tokens per task (null = unlimited)
-  workflow_budget_tokens: 200000      # Max tokens per workflow (null = unlimited)
-  warn_at_pct: 80                     # Warn at N% of limit
-  chars_per_token: 4                  # Heuristic (giam 2-3 cho tieng Viet)
-  # pricing: (USD per 1M tokens) — optional, enables cost estimates in summary
-  #   claude-opus-4:
-  #     prompt: 15.00
-  #     completion: 75.00
-  #   claude-sonnet-4:
-  #     prompt: 3.00
-  #     completion: 15.00
-  #   gpt-5.4:
-  #     prompt: 2.50
-  #     completion: 10.00
-  #   gemini-2.5-pro:
-  #     prompt: 1.25
-  #     completion: 10.00
+  task_budget_tokens: 50000       # Max tokens per task (null = unlimited)
+  workflow_budget_tokens: 200000  # Max tokens per workflow (null = unlimited)
+  warn_at_pct: 80                 # Warn when usage reaches N% of limit
 
-# === Cache (v2.1) ===
+# --- Cache (optional) ---
+# Caches specs and plans to skip redundant work on retry/resume.
 cache:
-  enabled: true                       # master switch — false = disable toan bo cache
-  ttl_days: 7                         # thoi gian song cache entry (>= 1)
-  max_entries: 100                    # toi da entries (LRU eviction khi vuot, >= 10)
-  auto_invalidate_on_git: true        # tu dong invalidate khi git diff thay doi
-  normalize_aggressive: false         # luon false — word sort da loai bo
-  log_cache_events: true              # log chi tiet cache hit/miss/invalidate
-  eviction_pct: 20                    # % entries cu nhat bi xoa khi LRU (10-50)
-  relevant_paths_strategy: "auto"     # "auto" | "manual" | "none"
+  enabled: true
+  ttl_days: 7                     # Cache entry lifetime
+  max_entries: 100                # Max cache entries (LRU eviction)
 
-  # Cache reactions
-  cache-hit:
-    auto: true
-    action: log
-  cache-invalidated:
-    auto: true
-    action: log
-
-# === Proxy Config (v2.4) ===
-# Auto-start Claude→OpenAI proxy on session startup
-# proxy:
-#   enabled: true                        # true = auto-start proxy khi Claude Code mo
-#   port: 4141                           # Port cho proxy server
-#   model: "gpt-5.4"                     # Target model (tat ca requests map ve model nay)
-#   # Nho them vao .claude/settings.json:
-#   #   { "env": { "ANTHROPIC_BASE_URL": "http://localhost:4141", "ANTHROPIC_API_KEY": "proxy" } }
-
-# === OAuth Config (v2.1) ===
+# --- OAuth (for Codex mode) ---
+# Manages OpenAI authentication for autodev-codex.
+# Login: autodev-codex auth login
 oauth:
   openai:
-    default_account: "default"           # Ten account mac dinh cho cross-model dispatch
-    allow_api_key_fallback: true          # Cho phep fallback ve OPENAI_API_KEY
-    auto_refresh: true                    # Tu dong refresh truoc khi dispatch
+    default_account: "default"
+    allow_api_key_fallback: true
+    auto_refresh: true
