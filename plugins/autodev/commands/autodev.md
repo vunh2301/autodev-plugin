@@ -1,6 +1,6 @@
 ---
 name: autodev
-description: "Automated development workflow orchestrator. Runs spec → plan → implement → PR → review pipeline with parallel tasks. Usage: /autodev \"add rate limiting\" or /autodev wf_001:task_01 retry"
+description: "Automated development workflow orchestrator. Runs spec → plan → implement → PR → review pipeline with parallel tasks. Usage: /autodev \"request\" (Claude) or /autodev codex \"request\" (GPT via proxy)"
 ---
 
 # Workflow Orchestrator — Automated Development Pipeline (v2)
@@ -31,6 +31,61 @@ Read `project.language` from config:
 
 ---
 
+## 0.1 Provider Mode — Claude vs Codex (v2.4)
+
+**Parse lệnh đầu tiên:**
+
+```
+/autodev "add rate limiting"           → provider = "claude" (mặc định)
+/autodev codex "add rate limiting"     → provider = "codex" (GPT via proxy)
+```
+
+**Khi provider = "codex":**
+
+1. **Auto-start proxy** (nếu chưa chạy):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/proxy.mjs" --port 4141 --target-model gpt-5.4
+   ```
+   Chờ 2 giây cho proxy ready. Check: `curl -s http://localhost:4141/v1/messages` trả về response.
+
+2. **Ghi provider mode vào state file** cho session:
+   ```jsonc
+   // .workflow/{wf_id}/state.json
+   "provider_mode": "codex"    // "claude" | "codex"
+   ```
+
+3. **Ghi nhớ cho session** — log:
+   ```
+   🟣 ▸ Provider: codex (GPT via proxy localhost:4141)
+   ```
+   Từ đây TẤT CẢ dispatches trong workflow này đi qua proxy.
+   Các workflow mới trong session cũng kế thừa provider mode (trừ khi user gõ `/autodev "..."` không có prefix).
+
+4. **Đảm bảo env vars đã set:**
+   - `ANTHROPIC_BASE_URL=http://localhost:4141`
+   - `ANTHROPIC_API_KEY=proxy`
+   Nếu chưa set → tự set qua `$CLAUDE_ENV_FILE` hoặc thông báo user thêm vào `.claude/settings.json`.
+
+**Khi provider = "claude":**
+- Không start proxy, dùng Claude API mặc định.
+- Đây là behavior hiện tại, không thay đổi gì.
+
+**Session memory:**
+**Codex model mapping (mặc định):**
+- `implementing` (execute code) → `gpt-5.3-codex`
+- Tất cả phases khác (brainstorm, spec, plan, review, escalation) → `gpt-5.4`
+- Override qua `reactions.yaml` → `proxy.model_map`
+
+**Session memory:**
+- Provider mode lưu trong registry: `registry.session_provider = "codex" | "claude" | null`
+- Khi user gọi `/autodev codex "..."` lần đầu → set `session_provider = "codex"`
+- Các lần gọi `/autodev "..."` sau (không prefix) → check `session_provider`:
+  - Nếu `"codex"` → tiếp tục dùng codex
+  - Nếu `null` hoặc `"claude"` → dùng claude
+- Reset: `/autodev claude "..."` → set `session_provider = "claude"` (switch back)
+
+---
+
 ## 1. Overview & Guide
 
 Bạn là **meta-controller** — bộ điều phối trung tâm quản lý **nhiều workflows đồng thời** trong cùng một Claude Code session. Bạn KHÔNG viết code, KHÔNG viết spec, KHÔNG viết plan. Bạn chỉ có **5 trách nhiệm**:
@@ -43,6 +98,14 @@ Bạn là **meta-controller** — bộ điều phối trung tâm quản lý **nh
 
 Khi user gọi `/autodev "yêu cầu"`, bạn bắt đầu pipeline từ đầu đến cuối. Mọi giao tiếp giữa teammates đều đi qua bạn — teammates không nói chuyện trực tiếp.
 
+### Usage
+
+```
+/autodev "add rate limiting"            ← dùng Claude (mặc định)
+/autodev codex "add rate limiting"      ← dùng GPT via proxy (session nhớ)
+/autodev claude "add rate limiting"     ← switch lại Claude
+```
+
 ### Addressing Scheme
 
 | Cú pháp | Ý nghĩa | Ví dụ |
@@ -50,6 +113,8 @@ Khi user gọi `/autodev "yêu cầu"`, bạn bắt đầu pipeline từ đầu 
 | `wf_001` | Toàn bộ workflow | `/autodev-status wf_001` |
 | `wf_001:task_01` | Task cụ thể trong workflow | `/autodev-retry wf_001:task_01` |
 | _(không argument)_ | Tất cả workflows đang active | `/autodev-status` |
+| `codex` | Provider prefix — dùng GPT | `/autodev codex "request"` |
+| `claude` | Provider prefix — dùng Claude | `/autodev claude "request"` |
 
 
 ---
@@ -2321,6 +2386,12 @@ Khi user gọi `/autodev "yêu cầu"`:
 
 ```
 ⚠ QUY TẮC UX: Output log TRƯỚC MỖI bước — user phải biết đang làm gì, không được im lặng.
+
+0. PROVIDER MODE CHECK (Section 0.1)
+   → Parse: "codex" prefix? → start proxy, set session_provider
+   → Parse: "claude" prefix? → reset session_provider
+   → Không prefix → check registry.session_provider
+   → LOG: 🟣 ▸ [{HH:MM:SS}] Provider: {claude|codex}
 
 1. V1 MIGRATION CHECK (Section 25)
    → LOG: 🟣 ▸ [{HH:MM:SS}] Kiểm tra v1 migration...

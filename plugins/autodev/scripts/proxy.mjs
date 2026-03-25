@@ -26,18 +26,21 @@ function getArg(name, fallback) {
 
 const PORT = parseInt(getArg('--port', '4141'))
 const TARGET_MODEL = getArg('--target-model', 'gpt-5.4')
+const EXEC_MODEL = getArg('--exec-model', 'gpt-5.3-codex')
 const ACCOUNT = getArg('--account', 'default')
 const OPENAI_URL = getArg('--target-url', 'https://api.openai.com/v1/chat/completions')
 const LOG_LEVEL = getArg('--log', 'info') // 'debug' | 'info' | 'quiet'
 
 // Model mapping: Anthropic model names → OpenAI model names
+// Opus (heavy lifting / implementing) → codex model
+// Others → general model
 const MODEL_MAP = {
-  'claude-opus-4': TARGET_MODEL,
+  'claude-opus-4': EXEC_MODEL,
+  'claude-opus-4-6': EXEC_MODEL,
   'claude-sonnet-4': TARGET_MODEL,
-  'claude-haiku-4-5': TARGET_MODEL,
   'claude-sonnet-4-5': TARGET_MODEL,
-  'claude-opus-4-6': TARGET_MODEL,
   'claude-sonnet-4-6': TARGET_MODEL,
+  'claude-haiku-4-5': TARGET_MODEL,
   'claude-haiku-4-5-20251001': TARGET_MODEL,
 }
 
@@ -591,7 +594,8 @@ server.listen(PORT, '127.0.0.1', () => {
   ─────────────────────────────────────────────
   Listening:    http://localhost:${PORT}
   Target:       ${OPENAI_URL}
-  Model:        * → ${TARGET_MODEL}
+  Execute:      opus → ${EXEC_MODEL}
+  General:      * → ${TARGET_MODEL}
   Account:      ${ACCOUNT}
 
   Configure Claude Code:
