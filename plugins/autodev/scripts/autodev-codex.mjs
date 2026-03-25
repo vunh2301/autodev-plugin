@@ -93,50 +93,85 @@ function getArg(name, fallback) {
   return i !== -1 && i + 1 < args.length ? args[i + 1] : fallback
 }
 
-const PROXY_URL = getArg('--proxy', 'http://localhost:2300')
+const PROXY_PORT = getArg('--port', '4141')
+const PROXY_URL = getArg('--proxy', `http://localhost:${PROXY_PORT}`)
 
 // Extract claude args (everything after --)
 const dashDashIdx = args.indexOf('--')
 const claudeArgs = dashDashIdx !== -1 ? args.slice(dashDashIdx + 1) : []
 
-// Check aiproxy is running
+// Check if proxy is already running
 async function checkProxy() {
   try {
-    const resp = await fetch(`${PROXY_URL}/health`, { signal: AbortSignal.timeout(3000) })
-    return resp.ok
+    const resp = await fetch(`${PROXY_URL}/v1/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(3000),
+    })
+    // Any response (even 400/404) means proxy is running
+    return true
   } catch {
     return false
   }
 }
 
+// Start proxy.mjs as a background process
+function startProxy() {
+  const proxyScript = resolve(__dirname, 'proxy.mjs')
+  const proxyArgs = ['--port', PROXY_PORT]
+
+  // Forward --target-model, --exec-model, --account, --target-url, --log if provided
+  for (const flag of ['--target-model', '--exec-model', '--account', '--target-url', '--log']) {
+    const val = getArg(flag, null)
+    if (val) proxyArgs.push(flag, val)
+  }
+
+  const child = spawn('node', [proxyScript, ...proxyArgs], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+    detached: false,
+  })
+
+  child.unref()
+  return child
+}
+
 async function main() {
-  const proxyOk = await checkProxy()
+  let proxyOk = await checkProxy()
+  let proxyChild = null
+
   if (!proxyOk) {
-    console.error(`
-  aiproxy not running at ${PROXY_URL}
+    console.log('  Starting proxy...')
+    proxyChild = startProxy()
 
-  Start aiproxy first:
-    cd /path/to/aiproxy && npm start
-    # or: turbo-proxy start
+    // Wait for proxy to be ready (up to 10s)
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      proxyOk = await checkProxy()
+      if (proxyOk) break
+    }
 
-  Or specify custom URL:
-    autodev-codex --proxy http://localhost:3000
+    if (!proxyOk) {
+      console.error(`
+  Proxy failed to start on ${PROXY_URL}
+  Check: node ${resolve(__dirname, 'proxy.mjs')} --port ${PROXY_PORT}
 `)
-    process.exit(1)
+      process.exit(1)
+    }
   }
 
   console.log(`
   autodev-codex
   ─────────────────────────────────
-  Proxy:    ${PROXY_URL} (aiproxy)
-  Mode:     Full Codex via aiproxy
+  Proxy:    ${PROXY_URL} (built-in)
+  Mode:     Full Codex via proxy
   ─────────────────────────────────
 `)
 
-  console.log('Launching Claude Code via aiproxy...\n')
+  console.log('Launching Claude Code...\n')
 
   const allClaudeArgs = [
-    '--system-prompt', `[CODEX MODE] You are running on OpenAI Codex via aiproxy (${PROXY_URL}). All API calls are translated by aiproxy: Anthropic Messages → OpenAI Responses API → Codex. You have full tool access. Mention this when asked what model you are.`,
+    '--system-prompt', `[CODEX MODE] You are running on OpenAI Codex via proxy (${PROXY_URL}). All API calls are translated: Anthropic Messages → OpenAI Responses API → Codex. You have full tool access. Mention this when asked what model you are.`,
     ...claudeArgs,
   ]
 
@@ -145,6 +180,7 @@ async function main() {
     env: {
       ...process.env,
       ANTHROPIC_BASE_URL: PROXY_URL,
+      ANTHROPIC_API_KEY: 'proxy',
       CLAUDE_CODE_DISABLE_1M_CONTEXT: '1',
       AUTODEV_PROVIDER: 'codex',
     },
