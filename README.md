@@ -83,11 +83,7 @@ autodev-codex
 | `/autodev-retry wf_001:task_01` | Retry a failed task |
 | `/autodev-cancel` | Cancel all workflows |
 | `/autodev-cancel wf_001` | Cancel specific workflow |
-| `/autodev-proxy` | Start proxy to use GPT/Codex instead of Claude |
 | `/autodev-dashboard` | Open web dashboard (live progress, budget, tasks) |
-| `/autodev-auth codex login` | Login to OpenAI (PKCE + auto-fallback Device Code) |
-| `/autodev-auth codex status` | Show OAuth token status |
-| `/autodev-auth codex accounts` | List OAuth accounts |
 
 ## Configuration
 
