@@ -1,9 +1,9 @@
 {
-  "description": "Autodev session hooks — detect pending workflows and cleanup orphan worktrees on startup",
+  "description": "Autodev hooks — workflow detection, worktree cleanup, compact resilience",
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume",
+        "matcher": "startup|resume|compact",
         "hooks": [
           {
             "type": "command",
@@ -12,6 +12,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-cleanup.mjs\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-state.mjs\""
           }
         ]
       }

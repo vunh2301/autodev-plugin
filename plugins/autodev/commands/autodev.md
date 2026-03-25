@@ -929,6 +929,36 @@ Teammate chết/không phản hồi hoặc retry
 **Recovery prompt bổ sung vào unified-author (8.1) và unified-reviewer (8.2):**
 Template đã bao gồm các paths cần thiết. Teammate mới chỉ cần Read files để khôi phục context.
 
+### 9.5.0.1 Compact Recovery — Tự Phục Hồi Sau Context Compaction
+
+Khi Claude Code compact context (tự động khi gần context limit), orchestrator **mất toàn bộ
+in-memory state** (task list, progress tracking, teammate names). Nhưng disk state vẫn nguyên.
+
+**PreCompact hook** inject workflow summary vào context trước khi compact → orchestrator nhìn
+thấy summary sau compact và biết cần resume.
+
+**Post-compact flow:**
+
+```
+Context compacted
+    ↓
+SessionStart hook fires (matcher: "compact")
+    ↓
+workflow-detect.mjs output hiện trong context:
+    "⏸ N workflow(s) đang chờ: {wf_id} (running) — {request}"
+    ↓
+Orchestrator PHẢI:
+    1. Đọc .workflow/registry.json → lấy active workflows
+    2. Đọc .workflow/{wf_id}/state.json → lấy task states
+    3. Identify tasks đang running/pending
+    4. Re-spawn teammates cho tasks đang giữa phase (dùng recovery prompt 9.5.0)
+    5. Tiếp tục pipeline từ phase hiện tại của mỗi task
+```
+
+**⚠ CRITICAL:** Sau compact, TẤT CẢ teammates đã chết (context bị xóa).
+Orchestrator PHẢI spawn lại teammates mới cho mọi active tasks.
+Dùng Graceful Context Recovery (9.5.0) để truyền artifacts đã tạo.
+
 ### 9.5.1 Pause Check Trước Mỗi Dispatch
 
 **TRƯỚC MỖI dispatch** (spawn hoặc SendMessage), orchestrator PHẢI:
