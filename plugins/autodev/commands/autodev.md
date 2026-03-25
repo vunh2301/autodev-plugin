@@ -1723,6 +1723,98 @@ Nếu branch đã tồn tại → hỏi user: ghi đè, đổi tên, hoặc hu�
 Nếu thấy `.workflow/state.json` (v1 singleton) mà KHÔNG có `.workflow/registry.json`:
 → Chạy v1 Migration (Section 25) trước khi tiếp tục.
 
+### 17.5 Cross-Workflow Communication (v2.2.9)
+
+Khi nhiều workflows chạy đồng thời trong cùng session, chúng CÓ THỂ giao tiếp.
+
+**Cơ chế 1: Direct SendMessage (cùng session)**
+
+Agent names là global trong session. Workflow A có thể SendMessage tới teammate của Workflow B nếu biết tên:
+
+```
+Workflow A (wf_001) có: author-wf_001-task_01, reviewer-wf_001-task_01
+Workflow B (wf_002) có: author-wf_002-task_01, reviewer-wf_002-task_01
+
+Orchestrator CÓ THỂ:
+  SendMessage(to: "author-wf_002-task_01", message: "...")
+```
+
+**Khi nào dùng:** Orchestrator phát hiện 2 workflows có file overlap → cần coordinate.
+
+**Cơ chế 2: Shared Artifact Protocol (file-based)**
+
+Workflows chia sẻ dữ liệu qua `.workflow/shared/`:
+
+```
+.workflow/shared/
+├── signals/                    # Cross-workflow signals
+│   ├── wf_001_completed_auth.json    # "auth module ready"
+│   └── wf_002_needs_auth.json        # "waiting for auth module"
+└── artifacts/                  # Shared output files
+    └── auth-api-spec.md        # Artifact workflow A tạo, workflow B đọc
+```
+
+**Signal file format:**
+```jsonc
+{
+  "from_wf": "wf_001",
+  "signal": "module_ready",     // "module_ready" | "needs_input" | "conflict_warning"
+  "data": {
+    "module": "auth",
+    "files": ["src/auth/index.ts", "src/auth/middleware.ts"],
+    "branch": "workflow/auth-refactor"
+  },
+  "at": "ISO"
+}
+```
+
+**Cơ chế 3: Orchestrator Coordination (recommended)**
+
+Orchestrator (main agent) quản lý tất cả workflows — nó BIẾT state của mọi workflow.
+Khi dispatch task cho workflow B, orchestrator có thể inject context từ workflow A:
+
+```
+Trước khi dispatch task cho workflow B:
+    ↓
+Orchestrator đọc state của TẤT CẢ active workflows
+    ↓
+Phát hiện dependency hoặc overlap?
+    ├── CÓ overlap files → inject warning vào teammate prompt:
+    │     "⚠ Workflow {wf_001} đang sửa files: {overlapping_files}.
+    │      Branch: workflow/{slug}. Tránh conflict."
+    │
+    ├── CÓ dependency (B cần output A) → check A đã xong chưa:
+    │     ├── A xong → inject artifact path vào B's prompt
+    │     └── A chưa xong → CHẶN task B, đặt status "blocked"
+    │         → Khi A xong → unblock B, dispatch với context mới
+    │
+    └── KHÔNG overlap → dispatch bình thường
+```
+
+**Task blocking cho dependency:**
+
+```jsonc
+// Trong state.json của workflow B
+{
+  "task_id": "task_01",
+  "status": "blocked",
+  "blocked_by": {
+    "wf_id": "wf_001",
+    "task_id": "task_02",
+    "reason": "Waiting for auth module implementation",
+    "files_needed": ["src/auth/index.ts"]
+  }
+}
+```
+
+Khi workflow A's task hoàn thành → orchestrator scan tất cả blocked tasks → unblock + dispatch.
+
+**Giới hạn:**
+- Cross-workflow chỉ hoạt động trong CÙNG SESSION. Khác session = không thể SendMessage.
+- Orchestrator phải chủ động coordinate — teammates KHÔNG tự biết workflow khác tồn tại.
+- File overlap detection dùng `files_touched[]` từ task decomposition (Section 5).
+- Max complexity: recommend ≤ 3 concurrent workflows khi có dependencies.
+
 ---
 
 ## 18. Escalation Engine — Xu Ly Leo Thang (v2.1 Cross-Model)
