@@ -843,8 +843,10 @@ async function handleRequest(req, res) {
         const frames = pushBuffer(text)
 
         for (const frame of frames) {
+          log('debug', 'SSE frame:', frame.substring(0, 120))
           const chunks = translator.translateChunk(frame)
           for (const chunk of chunks) {
+            log('debug', 'Claude chunk:', chunk.frame.substring(0, 120))
             res.write(chunk.frame)
             if (chunk.isComplete) streamCompleted = true
           }
