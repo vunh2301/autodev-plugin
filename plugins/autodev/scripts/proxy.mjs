@@ -670,30 +670,69 @@ async function handleRequest(req, res) {
     const translator = new ResponsesToClaudeStream(requestModel)
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
-    let buffer = ''
+
+    // SSE frame buffer — from aiproxy base-provider.ts
+    // Accumulates partial text, yields only complete frames on \n\n boundaries
+    let bufParts = []
+    function pushBuffer(chunk) {
+      if (!chunk) return []
+      bufParts.push(chunk)
+      const buffer = bufParts.join('')
+      const frames = []
+      let remaining = buffer
+      let idx
+      while ((idx = remaining.indexOf('\n\n')) !== -1) {
+        frames.push(remaining.slice(0, idx + 2))
+        remaining = remaining.slice(idx + 2)
+      }
+      bufParts = remaining ? [remaining] : []
+      return frames
+    }
+    function flushBuffer() {
+      if (bufParts.length === 0) return null
+      const leftover = bufParts.join('')
+      bufParts = []
+      return leftover.trim() ? leftover : null
+    }
+
+    let streamCompleted = false
 
     try {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        // Split on double newlines (SSE frame boundary)
-        const frames = buffer.split('\n\n')
-        buffer = frames.pop() // Keep incomplete frame
+        const text = decoder.decode(value, { stream: true })
+        const frames = pushBuffer(text)
 
         for (const frame of frames) {
-          if (!frame.trim()) continue
           const chunks = translator.translateChunk(frame)
           for (const chunk of chunks) {
             res.write(chunk.frame)
+            if (chunk.isComplete) streamCompleted = true
           }
         }
       }
-      // Process remaining buffer
-      if (buffer.trim()) {
-        const chunks = translator.translateChunk(buffer)
-        for (const chunk of chunks) res.write(chunk.frame)
+
+      // Flush any remaining partial frame
+      const leftover = flushBuffer()
+      if (leftover) {
+        const chunks = translator.translateChunk(leftover)
+        for (const chunk of chunks) {
+          res.write(chunk.frame)
+          if (chunk.isComplete) streamCompleted = true
+        }
+      }
+
+      // Fallback: if stream ended without response.completed
+      if (!streamCompleted) {
+        log('debug', 'Stream ended without response.completed — emitting closing frames')
+        const stopReason = translator.completedTools.length > 0 ? 'tool_use' : 'end_turn'
+        res.write(claudeFrame('message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: stopReason },
+          usage: { output_tokens: translator._outputTokens || 0 },
+        }))
+        res.write(claudeFrame('message_stop', { type: 'message_stop' }))
       }
     } catch (err) {
       log('info', 'Stream error:', err.message)
