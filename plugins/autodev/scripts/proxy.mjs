@@ -658,17 +658,6 @@ async function handleRequest(req, res) {
 
   log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length} | msgs=${(body.messages || []).length}`)
 
-  // Debug: dump request to file for analysis
-  if (LOG_LEVEL === 'debug') {
-    const fs = await import('node:fs')
-    const debugDir = '.workflow/proxy-debug'
-    fs.mkdirSync(debugDir, { recursive: true })
-    const ts = Date.now()
-    fs.writeFileSync(`${debugDir}/${ts}-req-anthropic.json`, JSON.stringify(body, null, 2))
-    fs.writeFileSync(`${debugDir}/${ts}-req-hub.json`, JSON.stringify(anthropicToHub(rewrittenBody), null, 2))
-    fs.writeFileSync(`${debugDir}/${ts}-req-codex.json`, JSON.stringify(prepareCodexBody(anthropicToHub(rewrittenBody)), null, 2))
-  }
-
   // Get token
   let token
   try { token = getToken() } catch (err) {
@@ -682,6 +671,17 @@ async function handleRequest(req, res) {
 
   // Translate: Anthropic → Hub (Responses API format)
   const hubRequest = anthropicToHub(rewrittenBody)
+
+  // Debug: dump request to file for analysis
+  if (LOG_LEVEL === 'debug') {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const debugDir = '.workflow/proxy-debug'
+    mkdirSync(debugDir, { recursive: true })
+    const ts = Date.now()
+    writeFileSync(`${debugDir}/${ts}-req-anthropic.json`, JSON.stringify(body, null, 2))
+    writeFileSync(`${debugDir}/${ts}-req-hub.json`, JSON.stringify(hubRequest, null, 2))
+    writeFileSync(`${debugDir}/${ts}-req-codex.json`, JSON.stringify(prepareCodexBody(hubRequest), null, 2))
+  }
 
   // Prepare body for Codex endpoint
   const codexBody = prepareCodexBody(hubRequest)
