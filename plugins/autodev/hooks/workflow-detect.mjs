@@ -4,6 +4,14 @@ import { join } from 'path';
 const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const registryFile = join(cwd, '.workflow', 'registry.json');
 
+// Show provider indicator
+const provider = process.env.AUTODEV_PROVIDER;
+if (provider === 'codex') {
+  const model = process.env.AUTODEV_CODEX_MODEL || 'gpt-5.4';
+  const execModel = process.env.AUTODEV_CODEX_EXEC_MODEL || 'gpt-5.3-codex';
+  console.log(`[codex] Provider: OpenAI Codex | General: ${model} | Execute: ${execModel}`);
+}
+
 // v2: đọc registry thay vì singleton state.json
 if (!existsSync(registryFile)) {
   // Fallback v1: check singleton state.json
