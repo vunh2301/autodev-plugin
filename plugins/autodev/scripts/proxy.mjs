@@ -154,6 +154,33 @@ function rewriteSkillDirectivesInBody(body) {
   return result
 }
 
+// ---------------------------------------------------------------------------
+// Extract loaded skills from conversation history (for response-side dedup)
+// From aiproxy pipeline/orchestrator.ts
+// ---------------------------------------------------------------------------
+function extractLoadedSkills(body) {
+  const skills = new Set()
+  if (!body || typeof body !== 'object') return skills
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  for (const msg of messages) {
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (part.type === 'tool_use' && part.name === 'Skill') {
+        try {
+          const input = part.input
+          if (typeof input?.skill === 'string') skills.add(input.skill)
+        } catch {}
+      }
+    }
+  }
+  return skills
+}
+
+function estimateInputTokens(body) {
+  if (!body || typeof body !== 'object') return 0
+  return Math.max(1, Math.ceil(JSON.stringify(body).length / 4))
+}
+
 function safeParse(str, fallback = {}) {
   try { return JSON.parse(str) } catch { return fallback }
 }
@@ -722,6 +749,8 @@ async function handleRequest(req, res) {
     })
 
     const translator = new ResponsesToClaudeStream(requestModel)
+    translator.inputTokenEstimate = estimateInputTokens(body)
+    translator.loadedSkills = extractLoadedSkills(body)
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
 
@@ -746,7 +775,9 @@ async function handleRequest(req, res) {
       if (bufParts.length === 0) return null
       const leftover = bufParts.join('')
       bufParts = []
-      return leftover.trim() ? leftover : null
+      if (!leftover || !leftover.trim()) return null
+      // Normalize: append \n\n so translator receives properly delimited frame
+      return leftover.endsWith('\n\n') ? leftover : leftover + '\n\n'
     }
 
     let streamCompleted = false
@@ -754,7 +785,24 @@ async function handleRequest(req, res) {
     try {
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
+
+        if (done) {
+          // Flush TextDecoder internal buffer (multi-byte chars split across boundary)
+          const trailing = decoder.decode()
+          if (trailing) pushBuffer(trailing)
+
+          // Flush remaining partial frame with \n\n normalization
+          const remaining = flushBuffer()
+          if (remaining) {
+            const chunks = translator.translateChunk(remaining)
+            for (const chunk of chunks) {
+              res.write(chunk.frame)
+              if (chunk.isComplete) streamCompleted = true
+            }
+          }
+          break
+        }
+
         const text = decoder.decode(value, { stream: true })
         const frames = pushBuffer(text)
 
@@ -764,16 +812,6 @@ async function handleRequest(req, res) {
             res.write(chunk.frame)
             if (chunk.isComplete) streamCompleted = true
           }
-        }
-      }
-
-      // Flush any remaining partial frame
-      const leftover = flushBuffer()
-      if (leftover) {
-        const chunks = translator.translateChunk(leftover)
-        for (const chunk of chunks) {
-          res.write(chunk.frame)
-          if (chunk.isComplete) streamCompleted = true
         }
       }
 
