@@ -14,6 +14,7 @@ Automated development workflow orchestrator for Claude Code.
 | `/resume-autodev` | Resume paused workflow |
 | `/autodev-retry` | Retry failed tasks |
 | `/autodev-cancel` | Cancel workflows |
+| `/autodev-proxy` | Use GPT instead of Claude |
 | `/autodev-dashboard` | Open web dashboard |
 | `/autodev-auth codex login` | Login to OpenAI |
 | `/autodev-auth codex status` | Show token status |
