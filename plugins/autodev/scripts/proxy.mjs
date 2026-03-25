@@ -1,11 +1,9 @@
 #!/usr/bin/env node
-// proxy.mjs — Mini Claude-to-OpenAI proxy for autodev
-// Translates Anthropic Messages API → OpenAI Chat Completions API
-// Usage: node proxy.mjs [--port 4141] [--target-model gpt-5.4] [--account default]
+// proxy.mjs — Full Claude-to-Codex proxy for autodev
+// Extracted from aiproxy: Anthropic Messages API ↔ OpenAI Responses API
+// Endpoint: https://chatgpt.com/backend-api/codex/responses
 //
-// Then configure Claude Code:
-//   ANTHROPIC_BASE_URL=http://localhost:4141
-//   ANTHROPIC_API_KEY=dummy  (proxy handles auth via OAuth)
+// Usage: node proxy.mjs [--port 4141] [--target-model gpt-5.4] [--account default]
 
 import { createServer } from 'node:http'
 import { execSync } from 'node:child_process'
@@ -28,12 +26,11 @@ const PORT = parseInt(getArg('--port', '4141'))
 const TARGET_MODEL = getArg('--target-model', 'gpt-5.4')
 const EXEC_MODEL = getArg('--exec-model', 'gpt-5.3-codex')
 const ACCOUNT = getArg('--account', 'default')
-const OPENAI_URL = getArg('--target-url', 'https://api.openai.com/v1/chat/completions')
-const LOG_LEVEL = getArg('--log', 'info') // 'debug' | 'info' | 'quiet'
+const CODEX_API_URL = getArg('--target-url', 'https://chatgpt.com/backend-api/codex/responses')
+const LOG_LEVEL = getArg('--log', 'info')
 
-// Model mapping: Anthropic model names → OpenAI model names
-// Opus (heavy lifting / implementing) → codex model
-// Others → general model
+// Model mapping: Claude model → Codex model
+// Opus (heavy lifting) → exec model, others → general model
 const MODEL_MAP = {
   'claude-opus-4': EXEC_MODEL,
   'claude-opus-4-6': EXEC_MODEL,
@@ -53,15 +50,18 @@ function log(level, ...args) {
 // ---------------------------------------------------------------------------
 // OAuth token
 // ---------------------------------------------------------------------------
+let cachedToken = null
+let cachedTokenExpiry = 0
+
 function getToken() {
+  // Check cache (5 min buffer)
+  if (cachedToken && Date.now() < cachedTokenExpiry - 300_000) return cachedToken
+
   const oauthScript = resolve(__dirname, 'oauth.mjs')
-  try {
-    readFileSync(oauthScript, { flag: 'r' })
-  } catch {
-    // No oauth.mjs — try env var
+  try { readFileSync(oauthScript, { flag: 'r' }) } catch {
     const key = process.env.OPENAI_API_KEY
     if (key) return key
-    throw new Error('No oauth.mjs found and no OPENAI_API_KEY set')
+    throw new Error('No oauth.mjs and no OPENAI_API_KEY')
   }
 
   try {
@@ -70,355 +70,483 @@ function getToken() {
       { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }
     )
     const parsed = JSON.parse(result.trim())
-    if (parsed.ok && parsed.data?.token) return parsed.data.token
-  } catch (err) {
-    log('info', 'OAuth fail:', err.message)
-  }
+    if (parsed.ok && parsed.data?.token) {
+      cachedToken = parsed.data.token
+      cachedTokenExpiry = Date.now() + 3600_000 // 1 hour
+      return cachedToken
+    }
+  } catch (err) { log('info', 'OAuth fail:', err.message) }
 
   const key = process.env.OPENAI_API_KEY
   if (key) return key
-  throw new Error('No credentials — run /autodev-auth codex login')
+  throw new Error('No credentials — run: autodev-codex auth login')
+}
+
+function extractAccountId(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+    return payload?.['https://api.openai.com/auth']?.chatgpt_account_id
+  } catch { return undefined }
 }
 
 // ---------------------------------------------------------------------------
-// Translate: Anthropic Messages → OpenAI Chat Completions
+// Utils (from aiproxy translator/utils.ts)
 // ---------------------------------------------------------------------------
-function translateRequest(body) {
-  const messages = []
-
-  // System prompt
-  if (body.system) {
-    const systemText = typeof body.system === 'string'
-      ? body.system
-      : Array.isArray(body.system)
-        ? body.system.map(b => b.text || '').join('\n')
-        : ''
-    if (systemText) messages.push({ role: 'system', content: systemText })
+function stripCacheControl(obj) {
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj
+  if (Array.isArray(obj)) return obj.map(item => stripCacheControl(item))
+  const result = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === 'cache_control') continue
+    result[key] = stripCacheControl(value)
   }
+  return result
+}
 
-  // Messages
-  for (const msg of body.messages || []) {
-    if (msg.role === 'user' || msg.role === 'assistant') {
-      // Content can be string or array of blocks
-      if (typeof msg.content === 'string') {
-        messages.push({ role: msg.role, content: msg.content })
-        continue
-      }
+function safeParse(str, fallback = {}) {
+  try { return JSON.parse(str) } catch { return fallback }
+}
 
-      if (!Array.isArray(msg.content)) {
-        messages.push({ role: msg.role, content: String(msg.content || '') })
-        continue
-      }
-
-      // Process content blocks
-      const textParts = []
-      const toolCalls = []
-      const toolResults = []
-
-      for (const block of msg.content) {
-        if (block.type === 'text') {
-          textParts.push(block.text)
-        } else if (block.type === 'tool_use') {
-          toolCalls.push({
-            id: block.id,
-            type: 'function',
-            function: {
-              name: block.name,
-              arguments: typeof block.input === 'string'
-                ? block.input
-                : JSON.stringify(block.input),
-            },
-          })
-        } else if (block.type === 'tool_result') {
-          const resultContent = typeof block.content === 'string'
-            ? block.content
-            : Array.isArray(block.content)
-              ? block.content.map(c => c.text || '').join('\n')
-              : JSON.stringify(block.content || '')
-          toolResults.push({
-            role: 'tool',
-            tool_call_id: block.tool_use_id,
-            content: resultContent,
-          })
-        }
-      }
-
-      // Assistant message with tool calls
-      if (msg.role === 'assistant') {
-        const m = {}
-        m.role = 'assistant'
-        if (textParts.length) m.content = textParts.join('\n')
-        else m.content = null
-        if (toolCalls.length) m.tool_calls = toolCalls
-        messages.push(m)
-      } else {
-        // User message
-        if (textParts.length) {
-          messages.push({ role: 'user', content: textParts.join('\n') })
-        }
-        // Tool results become separate tool messages
-        for (const tr of toolResults) {
-          messages.push(tr)
-        }
+function dedupSkillCalls(input) {
+  const callIdToSkill = new Map()
+  for (const item of input) {
+    if (item.type === 'function_call' && item.name === 'Skill') {
+      try {
+        const args = JSON.parse(item.arguments)
+        if (args.skill) callIdToSkill.set(item.call_id, args.skill)
+      } catch {}
+    }
+  }
+  const seenSkills = new Set()
+  const duplicateCallIds = new Set()
+  for (const item of input) {
+    if (item.type === 'function_call_output') {
+      const skillName = callIdToSkill.get(item.call_id)
+      if (skillName) {
+        if (seenSkills.has(skillName)) duplicateCallIds.add(item.call_id)
+        else seenSkills.add(skillName)
       }
     }
   }
+  if (duplicateCallIds.size > 0) {
+    for (let i = input.length - 1; i >= 0; i--) {
+      if (input[i].call_id && duplicateCallIds.has(input[i].call_id)) input.splice(i, 1)
+    }
+  }
+}
 
-  // Tools
+// ---------------------------------------------------------------------------
+// Translate: Anthropic Messages → Responses API (hub format)
+// From aiproxy translator/to-hub/anthropic-messages.ts
+// ---------------------------------------------------------------------------
+function anthropicToHub(body) {
+  const raw = { ...body }
+  const messages = Array.isArray(raw.messages) ? raw.messages : []
+
+  let instructions
+  if (raw.system !== undefined) {
+    if (typeof raw.system === 'string') instructions = raw.system
+    else if (Array.isArray(raw.system)) {
+      instructions = raw.system.filter(p => p.type === 'text').map(p => p.text || '').join('\n')
+    }
+  }
+
+  const input = []
+  let callIdCounter = 0
+
+  for (const msg of messages) {
+    const role = msg.role
+    const contentParts = Array.isArray(msg.content)
+      ? msg.content
+      : typeof msg.content === 'string'
+        ? [{ type: 'text', text: msg.content }]
+        : []
+
+    if (role === 'system') {
+      const text = contentParts.filter(p => p.type === 'text').map(p => p.text).join('\n')
+      if (text) instructions = instructions ? instructions + '\n' + text : text
+      continue
+    }
+
+    if (role === 'user') {
+      let userContent = []
+      const flushUserContent = () => {
+        if (userContent.length > 0) { input.push({ role: 'user', content: userContent }); userContent = [] }
+      }
+
+      for (const part of contentParts) {
+        if (part.type === 'tool_result') {
+          flushUserContent()
+          input.push({
+            type: 'function_call_output',
+            call_id: part.tool_use_id,
+            output: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
+          })
+        } else if (part.type === 'text') {
+          userContent.push({ type: 'input_text', text: part.text })
+        } else if (part.type === 'image') {
+          const source = part.source
+          const imageUrl = source.type === 'url' ? source.url : `data:${source.media_type};base64,${source.data}`
+          userContent.push({ type: 'input_image', image_url: imageUrl })
+        }
+      }
+      flushUserContent()
+
+    } else if (role === 'assistant') {
+      const assistantContent = []
+      const pendingFunctionCalls = []
+
+      for (const part of contentParts) {
+        if (part.type === 'tool_use') {
+          const name = (typeof part.name === 'string' && part.name) ? part.name : 'unknown_function'
+          const callId = (typeof part.id === 'string' && part.id) ? part.id : `call_${name}_${callIdCounter++}`
+          pendingFunctionCalls.push({
+            type: 'function_call',
+            call_id: callId,
+            name,
+            arguments: typeof part.input === 'string' ? part.input : JSON.stringify(part.input),
+          })
+        } else if (part.type === 'text') {
+          assistantContent.push({ type: 'output_text', text: part.text })
+        }
+      }
+
+      if (assistantContent.length > 0) input.push({ role: 'assistant', content: assistantContent })
+      for (const fc of pendingFunctionCalls) input.push(fc)
+    }
+  }
+
+  // Dedup repeated Skill tool calls
+  dedupSkillCalls(input)
+
+  // Inject placeholder outputs for unmatched function calls
+  const functionCallIds = new Set()
+  const functionOutputIds = new Set()
+  for (const item of input) {
+    if (item.type === 'function_call') functionCallIds.add(item.call_id)
+    else if (item.type === 'function_call_output') functionOutputIds.add(item.call_id)
+  }
+  for (const callId of functionCallIds) {
+    if (!functionOutputIds.has(callId)) {
+      input.push({ type: 'function_call_output', call_id: callId, output: '[No response received]' })
+    }
+  }
+
+  // Convert tools
   let tools
-  if (body.tools && body.tools.length > 0) {
-    tools = body.tools.map(t => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description || '',
-        parameters: t.input_schema || t.parameters || {},
-      },
-    }))
+  if (Array.isArray(raw.tools) && raw.tools.length > 0) {
+    tools = raw.tools
+      .map(t => {
+        const name = typeof t.name === 'string' ? t.name : ''
+        if (!name) return null
+        return stripCacheControl({
+          type: 'function',
+          name,
+          description: t.description,
+          parameters: t.input_schema || t.parameters || {},
+        })
+      })
+      .filter(t => t !== null)
   }
 
   // Map model
-  const model = MODEL_MAP[body.model] || TARGET_MODEL
+  const model = MODEL_MAP[raw.model] || TARGET_MODEL
 
-  const req = {
+  const result = {
     model,
-    messages,
-    stream: body.stream !== false,
-    max_tokens: body.max_tokens || 4096,
+    input: stripCacheControl(input),
+    store: false,
+    stream: true, // Codex always streams
   }
-  if (body.temperature != null) req.temperature = body.temperature
-  if (body.top_p != null) req.top_p = body.top_p
-  if (tools) req.tools = tools
 
-  return req
+  if (instructions !== undefined) result.instructions = instructions
+  if (tools) result.tools = tools
+
+  return result
 }
 
 // ---------------------------------------------------------------------------
-// Translate: OpenAI SSE → Anthropic SSE (streaming)
+// Codex body preparation (from aiproxy providers/codex.ts)
 // ---------------------------------------------------------------------------
-function createStreamTranslator(res, requestModel) {
-  const msgId = 'msg_' + Math.random().toString(36).slice(2, 14)
-  let contentIndex = 0
-  let currentToolCall = null
-  let toolCallArgs = ''
-  let inputTokens = 0
-  let outputTokens = 0
-  let started = false
+const ALLOWED_FIELDS = new Set([
+  'model', 'instructions', 'input', 'stream', 'store',
+  'tools', 'tool_choice', 'previous_response_id',
+  'reasoning', 'text', 'truncation', 'metadata',
+  'parallel_tool_calls',
+])
 
-  function send(event, data) {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+function prepareCodexBody(body) {
+  const out = {}
+  for (const key of Object.keys(body)) {
+    if (ALLOWED_FIELDS.has(key)) out[key] = body[key]
   }
-
-  function startMessage() {
-    if (started) return
-    started = true
-    send('message_start', {
-      type: 'message_start',
-      message: {
-        id: msgId,
-        type: 'message',
-        role: 'assistant',
-        content: [],
-        model: requestModel,
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    })
-  }
-
-  function startContentBlock(type, extra = {}) {
-    send('content_block_start', {
-      type: 'content_block_start',
-      index: contentIndex,
-      content_block: { type, ...extra },
-    })
-  }
-
-  function stopContentBlock() {
-    send('content_block_stop', {
-      type: 'content_block_stop',
-      index: contentIndex,
-    })
-    contentIndex++
-  }
-
-  return {
-    processChunk(chunk) {
-      // Parse OpenAI SSE chunk
-      const lines = chunk.split('\n')
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const payload = line.slice(6).trim()
-        if (payload === '[DONE]') {
-          // Finish any open tool call
-          if (currentToolCall) {
-            let parsedInput = {}
-            try { parsedInput = JSON.parse(toolCallArgs) } catch { parsedInput = { raw: toolCallArgs } }
-            send('content_block_delta', {
-              type: 'content_block_delta',
-              index: contentIndex,
-              delta: { type: 'input_json_delta', partial_json: toolCallArgs },
-            })
-            stopContentBlock()
-            currentToolCall = null
-            toolCallArgs = ''
-          }
-
-          // Message stop
-          send('message_delta', {
-            type: 'message_delta',
-            delta: { stop_reason: 'end_turn', stop_sequence: null },
-            usage: { output_tokens: outputTokens },
-          })
-          send('message_stop', { type: 'message_stop' })
-          return
-        }
-
-        let data
-        try { data = JSON.parse(payload) } catch { continue }
-
-        // Usage info
-        if (data.usage) {
-          inputTokens = data.usage.prompt_tokens || inputTokens
-          outputTokens = data.usage.completion_tokens || outputTokens
-        }
-
-        const delta = data.choices?.[0]?.delta
-        const finishReason = data.choices?.[0]?.finish_reason
-        if (!delta && !finishReason) continue
-
-        startMessage()
-
-        // Text content
-        if (delta?.content) {
-          // Close tool call if was open
-          if (currentToolCall) {
-            stopContentBlock()
-            currentToolCall = null
-            toolCallArgs = ''
-          }
-
-          // Start text block if first text
-          if (contentIndex === 0 || currentToolCall !== null) {
-            startContentBlock('text', { text: '' })
-          }
-
-          send('content_block_delta', {
-            type: 'content_block_delta',
-            index: contentIndex,
-            delta: { type: 'text_delta', text: delta.content },
-          })
-        }
-
-        // Tool calls
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (tc.id) {
-              // New tool call — close previous text block if open
-              if (contentIndex > 0 && !currentToolCall) {
-                stopContentBlock()
-              } else if (currentToolCall) {
-                stopContentBlock()
-              }
-
-              currentToolCall = { id: tc.id, name: tc.function?.name || '' }
-              toolCallArgs = tc.function?.arguments || ''
-              startContentBlock('tool_use', { id: tc.id, name: currentToolCall.name, input: {} })
-            } else if (tc.function?.arguments) {
-              toolCallArgs += tc.function.arguments
-              send('content_block_delta', {
-                type: 'content_block_delta',
-                index: contentIndex,
-                delta: { type: 'input_json_delta', partial_json: tc.function.arguments },
-              })
-            }
-          }
-        }
-
-        // Finish
-        if (finishReason) {
-          if (currentToolCall) {
-            stopContentBlock()
-            currentToolCall = null
-          } else if (started) {
-            stopContentBlock()
-          }
-
-          const stopReason = finishReason === 'tool_calls' ? 'tool_use'
-            : finishReason === 'length' ? 'max_tokens'
-            : 'end_turn'
-
-          send('message_delta', {
-            type: 'message_delta',
-            delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: outputTokens },
-          })
-          send('message_stop', { type: 'message_stop' })
-        }
-      }
-    },
-
-    ensureStarted() {
-      startMessage()
-      startContentBlock('text', { text: '' })
-    },
-  }
+  if (out.instructions === undefined) out.instructions = ''
+  out.stream = true
+  out.store = false
+  return out
 }
 
 // ---------------------------------------------------------------------------
-// Translate: OpenAI → Anthropic (non-streaming)
+// Stream translator: Responses API SSE → Claude SSE
+// From aiproxy translator/stream/responses-to-claude.ts
 // ---------------------------------------------------------------------------
-function translateResponse(openaiResp, requestModel) {
-  const choice = openaiResp.choices?.[0]
-  if (!choice) {
-    return {
-      id: 'msg_' + Math.random().toString(36).slice(2, 14),
-      type: 'message',
-      role: 'assistant',
-      content: [{ type: 'text', text: '' }],
-      model: requestModel,
-      stop_reason: 'end_turn',
-      usage: { input_tokens: 0, output_tokens: 0 },
+function claudeFrame(event, payload) {
+  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
+}
+
+function parseResponsesFrame(frame) {
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('data: ')) {
+      try { return JSON.parse(line.slice(6)) } catch { return null }
+    }
+  }
+  return null
+}
+
+class ResponsesToClaudeStream {
+  constructor(requestModel) {
+    this.requestModel = requestModel
+    this.responseId = ''
+    this.textBuf = ''
+    this.contentIndex = 0
+    this.blockCounter = 0
+    this.toolBlockStartEmitted = false
+    this.inputTokenEstimate = 0
+    this._inputTokens = 0
+    this._outputTokens = 0
+    this.completedTools = []
+    // Tool state
+    this.toolId = ''
+    this.toolName = ''
+    this.argBuf = ''
+    this.blockType = 'none'
+    // Skill dedup
+    this.loadedSkills = new Set()
+    this.bufferingSkillCall = false
+  }
+
+  translateChunk(frame) {
+    const d = parseResponsesFrame(frame)
+    if (!d) return []
+    const type = d.type
+
+    switch (type) {
+      case 'response.created': return this.handleCreated(d)
+      case 'response.output_item.added': return this.handleOutputItemAdded(d)
+      case 'response.content_part.added': return this.handleContentPartAdded(d)
+      case 'response.output_text.delta': return this.handleTextDelta(d)
+      case 'response.output_text.done': return []
+      case 'response.content_part.done': return this.handleContentPartDone()
+      case 'response.output_item.done': return []
+      case 'response.function_call_arguments.delta': return this.handleFnArgsDelta(d)
+      case 'response.function_call_arguments.done': return this.handleFnArgsDone(d)
+      case 'response.completed': return this.handleCompleted(d)
+      default: return []
     }
   }
 
-  const content = []
-  if (choice.message?.content) {
-    content.push({ type: 'text', text: choice.message.content })
+  handleCreated(d) {
+    const resp = d.response || {}
+    this.responseId = resp.id || ''
+    return [{
+      frame: claudeFrame('message_start', {
+        type: 'message_start',
+        message: {
+          id: this.responseId,
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: resp.model || this.requestModel,
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: this.inputTokenEstimate, output_tokens: 0 },
+        },
+      }),
+    }]
   }
-  if (choice.message?.tool_calls) {
-    for (const tc of choice.message.tool_calls) {
-      let input = {}
-      try { input = JSON.parse(tc.function.arguments) } catch { input = { raw: tc.function.arguments } }
-      content.push({
-        type: 'tool_use',
-        id: tc.id,
-        name: tc.function.name,
-        input,
+
+  handleOutputItemAdded(d) {
+    const item = d.item
+    if (item?.type === 'function_call') {
+      this.toolId = item.call_id || ''
+      this.toolName = item.name || ''
+      this.blockType = 'tool_use'
+      this.argBuf = ''
+      this.toolBlockStartEmitted = false
+      this.bufferingSkillCall = this.toolName === 'Skill' && this.loadedSkills.size > 0
+      this.contentIndex = this.blockCounter++
+    }
+    return []
+  }
+
+  handleContentPartAdded(d) {
+    const part = d.part
+    if (part?.type === 'output_text') {
+      this.blockType = 'text'
+      this.textBuf = ''
+      this.contentIndex = this.blockCounter++
+      return [{
+        frame: claudeFrame('content_block_start', {
+          type: 'content_block_start',
+          index: this.contentIndex,
+          content_block: { type: 'text', text: '' },
+        }),
+      }]
+    }
+    return []
+  }
+
+  handleTextDelta(d) {
+    const delta = d.delta
+    this.textBuf += delta
+    return [{
+      frame: claudeFrame('content_block_delta', {
+        type: 'content_block_delta',
+        index: this.contentIndex,
+        delta: { type: 'text_delta', text: delta },
+      }),
+    }]
+  }
+
+  handleContentPartDone() {
+    if (this.blockType === 'text') {
+      this.blockType = 'none'
+      return [{
+        frame: claudeFrame('content_block_stop', {
+          type: 'content_block_stop',
+          index: this.contentIndex,
+        }),
+      }]
+    }
+    return []
+  }
+
+  handleFnArgsDelta(d) {
+    const delta = d.delta
+    const chunks = []
+
+    if (this.blockType !== 'tool_use') {
+      this.blockType = 'tool_use'
+      this.argBuf = ''
+      this.contentIndex = this.blockCounter++
+    }
+
+    if (this.bufferingSkillCall) {
+      this.argBuf += delta
+      return []
+    }
+
+    if (!this.toolBlockStartEmitted) {
+      this.toolBlockStartEmitted = true
+      chunks.push({
+        frame: claudeFrame('content_block_start', {
+          type: 'content_block_start',
+          index: this.contentIndex,
+          content_block: { type: 'tool_use', id: this.toolId, name: this.toolName },
+        }),
       })
     }
-  }
-  if (content.length === 0) {
-    content.push({ type: 'text', text: '' })
+
+    this.argBuf += delta
+    chunks.push({
+      frame: claudeFrame('content_block_delta', {
+        type: 'content_block_delta',
+        index: this.contentIndex,
+        delta: { type: 'input_json_delta', partial_json: delta },
+      }),
+    })
+    return chunks
   }
 
-  const stopReason = choice.finish_reason === 'tool_calls' ? 'tool_use'
-    : choice.finish_reason === 'length' ? 'max_tokens'
-    : 'end_turn'
+  handleFnArgsDone(d) {
+    const callId = d.call_id || this.toolId
+    const name = d.name || this.toolName
+    const args = d.arguments || this.argBuf
 
-  return {
-    id: 'msg_' + Math.random().toString(36).slice(2, 14),
-    type: 'message',
-    role: 'assistant',
-    content,
-    model: requestModel,
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: {
-      input_tokens: openaiResp.usage?.prompt_tokens || 0,
-      output_tokens: openaiResp.usage?.completion_tokens || 0,
-    },
+    // Handle buffered Skill call dedup
+    if (this.bufferingSkillCall) {
+      this.bufferingSkillCall = false
+      let isDuplicate = false
+      try {
+        const parsed = JSON.parse(args)
+        if (parsed.skill && this.loadedSkills.has(parsed.skill)) isDuplicate = true
+      } catch {}
+
+      if (isDuplicate) {
+        this.blockType = 'none'; this.argBuf = ''; this.toolId = ''; this.toolName = ''
+        this.toolBlockStartEmitted = false; this.blockCounter--
+        return []
+      }
+
+      // Not duplicate — emit full buffered content
+      const emitChunks = []
+      emitChunks.push({ frame: claudeFrame('content_block_start', {
+        type: 'content_block_start', index: this.contentIndex,
+        content_block: { type: 'tool_use', id: callId, name },
+      })})
+      emitChunks.push({ frame: claudeFrame('content_block_delta', {
+        type: 'content_block_delta', index: this.contentIndex,
+        delta: { type: 'input_json_delta', partial_json: args },
+      })})
+      emitChunks.push({ frame: claudeFrame('content_block_stop', {
+        type: 'content_block_stop', index: this.contentIndex,
+      })})
+      this.completedTools.push({ callId, name, arguments: args })
+      this.blockType = 'none'; this.argBuf = ''; this.toolBlockStartEmitted = false
+      return emitChunks
+    }
+
+    const chunks = []
+
+    if (!this.toolBlockStartEmitted) {
+      this.toolBlockStartEmitted = true
+      this.contentIndex = this.blockCounter++
+      if (callId) this.toolId = callId
+      if (name) this.toolName = name
+      this.blockType = 'tool_use'
+      chunks.push({ frame: claudeFrame('content_block_start', {
+        type: 'content_block_start', index: this.contentIndex,
+        content_block: { type: 'tool_use', id: callId, name },
+      })})
+    }
+
+    if (!this.argBuf) {
+      chunks.push({ frame: claudeFrame('content_block_delta', {
+        type: 'content_block_delta', index: this.contentIndex,
+        delta: { type: 'input_json_delta', partial_json: args || '{}' },
+      })})
+    }
+
+    chunks.push({ frame: claudeFrame('content_block_stop', {
+      type: 'content_block_stop', index: this.contentIndex,
+    })})
+
+    this.completedTools.push({ callId, name, arguments: args })
+    this.toolId = ''; this.toolName = ''; this.argBuf = ''
+    this.blockType = 'none'; this.toolBlockStartEmitted = false
+    return chunks
+  }
+
+  handleCompleted(d) {
+    const resp = d.response || {}
+    const usage = resp.usage || {}
+
+    let stopReason
+    if (this.completedTools.length > 0) stopReason = 'tool_use'
+    else if (resp.stop_reason === 'max_tokens') stopReason = 'max_tokens'
+    else stopReason = 'end_turn'
+
+    this._inputTokens = usage.input_tokens || this.inputTokenEstimate
+    this._outputTokens = usage.output_tokens || 0
+
+    return [
+      { frame: claudeFrame('message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: stopReason },
+        usage: { output_tokens: this._outputTokens },
+      })},
+      { frame: claudeFrame('message_stop', { type: 'message_stop' }), isComplete: true },
+    ]
   }
 }
 
@@ -426,20 +554,17 @@ function translateResponse(openaiResp, requestModel) {
 // Proxy handler
 // ---------------------------------------------------------------------------
 async function handleRequest(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', '*')
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
-  // Only handle POST to /v1/messages
   if (req.method !== 'POST' || !req.url.includes('/v1/messages')) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not found. Use POST /v1/messages' }))
     return
   }
 
-  // Read body
   let rawBody = ''
   for await (const chunk of req) rawBody += chunk
 
@@ -451,106 +576,77 @@ async function handleRequest(req, res) {
   }
 
   const requestModel = body.model || 'claude-sonnet-4'
-  const isStream = body.stream !== false
+  const mappedModel = MODEL_MAP[requestModel] || TARGET_MODEL
 
-  log('info', `${requestModel} → ${TARGET_MODEL} | stream=${isStream} | tools=${(body.tools || []).length}`)
-  log('debug', `messages: ${(body.messages || []).length}`)
+  log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length}`)
 
-  // Get OAuth token
+  // Get token
   let token
-  try {
-    token = getToken()
-  } catch (err) {
-    log('info', 'Auth error:', err.message)
+  try { token = getToken() } catch (err) {
     res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({
-      type: 'error',
-      error: { type: 'authentication_error', message: err.message },
-    }))
+    res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: err.message } }))
     return
   }
 
-  // Translate request
-  const openaiReq = translateRequest(body)
+  // Translate: Anthropic → Hub (Responses API format)
+  const hubRequest = anthropicToHub(body)
 
-  // Forward to OpenAI
+  // Prepare body for Codex endpoint
+  const codexBody = prepareCodexBody(hubRequest)
+
+  // Build headers (from aiproxy providers/codex.ts)
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'Originator': 'codex_cli_rs',
+  }
+  const accountId = extractAccountId(token)
+  if (accountId) headers['Chatgpt-Account-Id'] = accountId
+
+  log('debug', `→ ${CODEX_API_URL} model=${codexBody.model}`)
+
+  // Forward to Codex
   try {
-    const upstream = await fetch(OPENAI_URL, {
+    let upstream = await fetch(CODEX_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(openaiReq),
+      headers,
+      body: JSON.stringify(codexBody),
     })
+
+    // 401 retry with fresh token
+    if (upstream.status === 401) {
+      log('info', '401 — refreshing token')
+      cachedToken = null
+      try {
+        const freshToken = getToken()
+        headers['Authorization'] = `Bearer ${freshToken}`
+        const freshAccountId = extractAccountId(freshToken)
+        if (freshAccountId) headers['Chatgpt-Account-Id'] = freshAccountId
+        upstream = await fetch(CODEX_API_URL, { method: 'POST', headers, body: JSON.stringify(codexBody) })
+      } catch {
+        res.writeHead(401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'Token refresh failed' } }))
+        return
+      }
+    }
 
     if (!upstream.ok) {
       const errText = await upstream.text()
-      log('info', `OpenAI error: ${upstream.status} ${errText.slice(0, 200)}`)
-
-      // 401 — retry with fresh token
-      if (upstream.status === 401) {
-        try {
-          const freshToken = getToken()
-          const retry = await fetch(OPENAI_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${freshToken}`,
-            },
-            body: JSON.stringify(openaiReq),
-          })
-          if (!retry.ok) {
-            const retryErr = await retry.text()
-            res.writeHead(retry.status, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({
-              type: 'error',
-              error: { type: 'api_error', message: retryErr },
-            }))
-            return
-          }
-          // Continue with retry response
-          return handleUpstreamResponse(retry, res, isStream, requestModel)
-        } catch {
-          res.writeHead(401, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({
-            type: 'error',
-            error: { type: 'authentication_error', message: 'Token refresh failed' },
-          }))
-          return
-        }
-      }
-
+      log('info', `Codex error: ${upstream.status} ${errText.slice(0, 300)}`)
       res.writeHead(upstream.status >= 500 ? 500 : upstream.status, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        type: 'error',
-        error: { type: 'api_error', message: errText.slice(0, 500) },
-      }))
+      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: errText.slice(0, 500) } }))
       return
     }
 
-    await handleUpstreamResponse(upstream, res, isStream, requestModel)
-
-  } catch (err) {
-    log('info', 'Fetch error:', err.message)
-    res.writeHead(502, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({
-      type: 'error',
-      error: { type: 'api_error', message: `Upstream error: ${err.message}` },
-    }))
-  }
-}
-
-async function handleUpstreamResponse(upstream, res, isStream, requestModel) {
-  if (isStream) {
+    // Stream translate: Responses API SSE → Claude SSE
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     })
 
-    const translator = createStreamTranslator(res, requestModel)
-
+    const translator = new ResponsesToClaudeStream(requestModel)
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -561,25 +657,38 @@ async function handleUpstreamResponse(upstream, res, isStream, requestModel) {
         if (done) break
         buffer += decoder.decode(value, { stream: true })
 
-        // Process complete lines
-        const lines = buffer.split('\n')
-        buffer = lines.pop() // Keep incomplete line
-        if (lines.length) {
-          translator.processChunk(lines.join('\n'))
+        // Split on double newlines (SSE frame boundary)
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() // Keep incomplete frame
+
+        for (const frame of frames) {
+          if (!frame.trim()) continue
+          const chunks = translator.translateChunk(frame)
+          for (const chunk of chunks) {
+            res.write(chunk.frame)
+          }
         }
       }
-      // Process remaining
-      if (buffer.trim()) translator.processChunk(buffer)
+      // Process remaining buffer
+      if (buffer.trim()) {
+        const chunks = translator.translateChunk(buffer)
+        for (const chunk of chunks) res.write(chunk.frame)
+      }
     } catch (err) {
       log('info', 'Stream error:', err.message)
+      // Emit closing frames on error
+      res.write(claudeFrame('message_delta', {
+        type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 },
+      }))
+      res.write(claudeFrame('message_stop', { type: 'message_stop' }))
     }
 
     res.end()
-  } else {
-    const data = await upstream.json()
-    const anthropicResp = translateResponse(data, requestModel)
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(anthropicResp))
+
+  } catch (err) {
+    log('info', 'Fetch error:', err.message)
+    res.writeHead(502, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `Upstream error: ${err.message}` } }))
   }
 }
 
@@ -590,10 +699,10 @@ const server = createServer(handleRequest)
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`
-  Autodev Proxy — Claude → OpenAI Translation
+  Autodev Proxy — Claude → Codex Translation
   ─────────────────────────────────────────────
   Listening:    http://localhost:${PORT}
-  Target:       ${OPENAI_URL}
+  Target:       ${CODEX_API_URL}
   Execute:      opus → ${EXEC_MODEL}
   General:      * → ${TARGET_MODEL}
   Account:      ${ACCOUNT}
@@ -602,8 +711,7 @@ server.listen(PORT, '127.0.0.1', () => {
     export ANTHROPIC_BASE_URL=http://localhost:${PORT}
     export ANTHROPIC_API_KEY=proxy
 
-  Or in .claude/settings.json:
-    { "env": { "ANTHROPIC_BASE_URL": "http://localhost:${PORT}", "ANTHROPIC_API_KEY": "proxy" } }
+  Or just run: autodev-codex
   ─────────────────────────────────────────────
 `)
 })
