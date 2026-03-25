@@ -62,11 +62,11 @@ This creates:
 **Or use GPT/Codex instead of Claude:**
 
 ```bash
-# Launch Claude Code with GPT backend (full session)
-node ~/.claude/plugins/cache/autodev-marketplace/autodev/2.4.3/scripts/autodev-codex.mjs
+# Install global command (one-time)
+node ~/.claude/plugins/cache/autodev-marketplace/autodev/*/scripts/install-cli.mjs
 
-# With options
-node autodev-codex.mjs --model gpt-5.4 --exec-model gpt-5.3-codex -- --plugin-dir ./plugins/autodev
+# Then just run:
+autodev-codex
 ```
 
 ## Commands
