@@ -637,6 +637,15 @@ async function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Headers', '*')
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
+  // Handle count_tokens endpoint — return fake response
+  if (req.url.includes('/count_tokens')) {
+    let ctBody = ''
+    for await (const chunk of req) ctBody += chunk
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ input_tokens: Math.ceil((ctBody.length || 100) / 4) }))
+    return
+  }
+
   if (req.method !== 'POST' || !req.url.includes('/v1/messages')) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not found. Use POST /v1/messages' }))
@@ -647,9 +656,25 @@ async function handleRequest(req, res) {
   for await (const chunk of req) rawBody += chunk
 
   let body
-  try { body = JSON.parse(rawBody) } catch {
+  try { body = JSON.parse(rawBody || '{}') } catch {
     res.writeHead(400, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Invalid JSON' }))
+    return
+  }
+
+  // Skip empty/invalid requests (health checks, malformed)
+  if (!body.model || !body.messages) {
+    log('debug', 'Empty request — returning empty response')
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      id: 'msg_empty',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: '' }],
+      model: body.model || 'unknown',
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 0, output_tokens: 0 },
+    }))
     return
   }
 
