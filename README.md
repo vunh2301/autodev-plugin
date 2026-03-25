@@ -181,7 +181,7 @@ Your `.workflow/reactions.yaml` config is **never overwritten** by updates — o
 - `gh` CLI (for PR creation/review)
 - Git
 - Node.js (for init script and hooks)
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (auto-set by plugin on startup)
 
 ## License
 

@@ -32,15 +32,11 @@ Tokens are stored at user-level (shared across projects):
 
 ## Requirements
 
-Set in your project's `.claude/settings.json`:
+- Claude Code CLI
+- `gh` CLI (for PR creation)
+- Node.js (for hooks and scripts)
 
-```json
-{
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  }
-}
-```
+> `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is auto-set by the plugin on startup via SessionStart hook.
 
 ## Full documentation
 
