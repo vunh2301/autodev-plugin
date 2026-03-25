@@ -1,20 +1,97 @@
 #!/usr/bin/env node
 // autodev-codex — Launch Claude Code with GPT/Codex as backend
-// Usage: node autodev-codex.mjs [--port 4141] [--model gpt-5.4] [-- claude args...]
 //
-// What it does:
-//   1. Starts proxy server (Claude API → OpenAI API translation)
-//   2. Waits for proxy to be ready
-//   3. Launches Claude Code with ANTHROPIC_BASE_URL pointing to proxy
-//   4. When Claude Code exits, stops proxy
+// Usage:
+//   autodev-codex                              # start full GPT session
+//   autodev-codex auth login [account]         # login OpenAI
+//   autodev-codex auth login --device [account] # login (headless)
+//   autodev-codex auth status [account]        # check token status
+//   autodev-codex auth logout <account>        # logout
+//   autodev-codex auth accounts                # list accounts
+//   autodev-codex --model gpt-5.4             # custom model
+//   autodev-codex -- --plugin-dir ./my-plugin  # pass args to claude
 
 import { spawn, execSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const oauthScript = resolve(__dirname, 'oauth.mjs')
+const proxyScript = resolve(__dirname, 'proxy.mjs')
 
-// Parse args
+// ---------------------------------------------------------------------------
+// Subcommand: auth
+// ---------------------------------------------------------------------------
+const firstArg = process.argv[2]
+
+if (firstArg === 'auth') {
+  // Forward to oauth.mjs: autodev-codex auth login → node oauth.mjs login
+  const oauthArgs = process.argv.slice(3) // everything after "auth"
+  if (oauthArgs.length === 0) {
+    console.log(`
+  autodev-codex auth — Manage OpenAI OAuth
+
+  Commands:
+    autodev-codex auth login [account]           Login (PKCE, auto-fallback Device Code)
+    autodev-codex auth login --device [account]  Login (force Device Code)
+    autodev-codex auth logout <account>          Remove account
+    autodev-codex auth status [account]          Check token validity
+    autodev-codex auth accounts                  List all accounts
+    autodev-codex auth default <account>         Set default account
+    autodev-codex auth refresh [account]         Force token refresh
+`)
+    process.exit(0)
+  }
+
+  try {
+    const result = execSync(`node "${oauthScript}" ${oauthArgs.join(' ')}`, {
+      encoding: 'utf-8',
+      stdio: ['inherit', 'pipe', 'inherit'],
+      timeout: 300000, // 5 min for login
+    })
+    // Pretty-print JSON output
+    try {
+      const parsed = JSON.parse(result.trim())
+      if (parsed.ok) {
+        console.log(JSON.stringify(parsed.data, null, 2))
+      } else {
+        console.error('Error:', parsed.error)
+        process.exit(1)
+      }
+    } catch {
+      process.stdout.write(result)
+    }
+  } catch (err) {
+    if (err.stderr) process.stderr.write(err.stderr)
+    process.exit(err.status || 1)
+  }
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: help
+// ---------------------------------------------------------------------------
+if (firstArg === 'help' || firstArg === '--help' || firstArg === '-h') {
+  console.log(`
+  autodev-codex — Claude Code powered by GPT/Codex
+
+  Usage:
+    autodev-codex                         Start full GPT session
+    autodev-codex auth <command>          Manage OpenAI OAuth
+    autodev-codex --model <name>          Custom model (default: gpt-5.4)
+    autodev-codex --exec-model <name>     Model for implementing (default: gpt-5.3-codex)
+    autodev-codex --port <N>              Proxy port (default: 4141)
+    autodev-codex -- <claude args>        Pass args to Claude Code
+
+  First time? Run:
+    autodev-codex auth login
+`)
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// Main: start proxy + claude
+// ---------------------------------------------------------------------------
 const args = process.argv.slice(2)
 function getArg(name, fallback) {
   const i = args.indexOf(name)
@@ -30,7 +107,29 @@ const ACCOUNT = getArg('--account', 'default')
 const dashDashIdx = args.indexOf('--')
 const claudeArgs = dashDashIdx !== -1 ? args.slice(dashDashIdx + 1) : []
 
-const proxyScript = resolve(__dirname, 'proxy.mjs')
+// Check auth first
+try {
+  const statusOut = execSync(`node "${oauthScript}" status ${ACCOUNT}`, {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 5000,
+  })
+  const status = JSON.parse(statusOut.trim())
+  if (!status.ok) {
+    console.error(`No OAuth credentials. Run:\n  autodev-codex auth login\n`)
+    process.exit(1)
+  }
+  if (status.data && !status.data.token_valid) {
+    console.error(`Token expired. Run:\n  autodev-codex auth login\n`)
+    process.exit(1)
+  }
+} catch {
+  // Check OPENAI_API_KEY fallback
+  if (!process.env.OPENAI_API_KEY) {
+    console.error(`No credentials found. Run:\n  autodev-codex auth login\n\nOr set OPENAI_API_KEY environment variable.\n`)
+    process.exit(1)
+  }
+}
 
 console.log(`
   autodev-codex
@@ -64,12 +163,11 @@ proxy.stderr.on('data', (d) => {
 async function waitForProxy(maxRetries = 20) {
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const resp = await fetch(`http://localhost:${PORT}/v1/messages`, {
+      await fetch(`http://localhost:${PORT}/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
       })
-      // Any response (even 400) means proxy is up
       return true
     } catch {
       await new Promise(r => setTimeout(r, 300))
@@ -82,7 +180,7 @@ async function waitForProxy(maxRetries = 20) {
 async function main() {
   const ready = await waitForProxy()
   if (!ready) {
-    console.error('Proxy failed to start. Check OAuth: /autodev-auth codex login')
+    console.error('Proxy failed to start.')
     proxy.kill()
     process.exit(1)
   }
@@ -103,19 +201,13 @@ async function main() {
     process.exit(code || 0)
   })
 
-  // Handle Ctrl+C
   process.on('SIGINT', () => {
     claude.kill('SIGINT')
-    setTimeout(() => {
-      proxy.kill()
-      process.exit(0)
-    }, 1000)
+    setTimeout(() => { proxy.kill(); process.exit(0) }, 1000)
   })
 
   process.on('SIGTERM', () => {
-    claude.kill()
-    proxy.kill()
-    process.exit(0)
+    claude.kill(); proxy.kill(); process.exit(0)
   })
 }
 
