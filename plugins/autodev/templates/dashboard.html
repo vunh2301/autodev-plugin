@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autodev Dashboard</title>
+<style>
+  :root {
+    --bg: #0a0a0a; --bg2: #141414; --bg3: #1e1e1e; --border: #2a2a2a;
+    --text: #e0e0e0; --text2: #888; --accent: #3b82f6; --green: #22c55e;
+    --red: #ef4444; --yellow: #eab308; --purple: #a855f7; --cyan: #06b6d4;
+    --font: 'Geist Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; line-height: 1.6; }
+
+  .header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+  .header h1 { font-size: 14px; font-weight: 600; }
+  .header h1 span { color: var(--accent); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+  .status-dot.connected { background: var(--green); }
+  .status-dot.disconnected { background: var(--red); }
+  .header-right { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--text2); }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat-card .label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.yellow { color: var(--yellow); }
+  .stat-card .value.red { color: var(--red); }
+  .stat-card .value.accent { color: var(--accent); }
+
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+  .workflow-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+  .workflow-header { padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .workflow-header:hover { background: var(--bg3); }
+  .workflow-id { font-weight: 600; color: var(--accent); }
+  .workflow-request { color: var(--text2); font-size: 12px; margin-left: 12px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .badge.running { background: rgba(59,130,246,0.15); color: var(--accent); }
+  .badge.paused { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .badge.completed { background: rgba(34,197,94,0.15); color: var(--green); }
+  .badge.failed { background: rgba(239,68,68,0.15); color: var(--red); }
+
+  .workflow-body { padding: 0 16px 16px; display: none; }
+  .workflow-card.expanded .workflow-body { display: block; }
+
+  .task-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  .task-table th { text-align: left; font-size: 11px; color: var(--text2); text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .task-table td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .task-table tr:last-child td { border-bottom: none; }
+  .task-table tr:hover { background: var(--bg3); }
+
+  .phase-badge { padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+  .phase-badge.writing { background: rgba(59,130,246,0.15); color: var(--accent); }
+  .phase-badge.review { background: rgba(168,85,247,0.15); color: var(--purple); }
+  .phase-badge.implementing { background: rgba(6,182,212,0.15); color: var(--cyan); }
+  .phase-badge.pr { background: rgba(34,197,94,0.15); color: var(--green); }
+  .phase-badge.done { background: rgba(34,197,94,0.15); color: var(--green); }
+  .phase-badge.pending { background: rgba(136,136,136,0.1); color: var(--text2); }
+  .phase-badge.failed { background: rgba(239,68,68,0.15); color: var(--red); }
+  .phase-badge.brainstorming { background: rgba(234,179,8,0.15); color: var(--yellow); }
+
+  .progress-bar { height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+
+  .budget-bar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .budget-bar .bar { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+  .budget-bar .fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .budget-bar .fill.ok { background: var(--green); }
+  .budget-bar .fill.warn { background: var(--yellow); }
+  .budget-bar .fill.exceeded { background: var(--red); }
+  .budget-bar .pct { font-size: 11px; color: var(--text2); min-width: 40px; text-align: right; }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text2); }
+  .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+  .empty-state p { font-size: 14px; }
+
+  .refresh-flash { animation: flash 0.3s; }
+  @keyframes flash { 0% { opacity: 0.5; } 100% { opacity: 1; } }
+
+  .token-fmt { font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 768px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .workflow-request { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>autodev</span> dashboard</h1>
+  <div class="header-right">
+    <span><span class="status-dot disconnected" id="conn-dot"></span><span id="conn-text">connecting...</span></span>
+    <span id="last-update"></span>
+  </div>
+</div>
+
+<div class="container" id="app">
+  <div class="empty-state">
+    <div class="icon">&#9881;</div>
+    <p>Loading...</p>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let data = null;
+
+// Format helpers
+function fmtNum(n) { return n != null ? n.toLocaleString() : '—'; }
+function fmtDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString();
+}
+
+function phaseClass(status) {
+  if (!status) return 'pending';
+  if (status.includes('writing') || status.includes('spec_plan_writing')) return 'writing';
+  if (status.includes('review')) return 'review';
+  if (status === 'implementing') return 'implementing';
+  if (status === 'brainstorming') return 'brainstorming';
+  if (status.includes('pr')) return 'pr';
+  if (status === 'completed') return 'done';
+  if (status === 'failed' || status === 'cancelled') return 'failed';
+  return 'pending';
+}
+
+function budgetPct(used, limit) {
+  if (!limit) return null;
+  return Math.min(100, Math.round((used / limit) * 100));
+}
+
+function render() {
+  const app = document.getElementById('app');
+  if (!data || !data.registry) {
+    app.innerHTML = `<div class="empty-state"><div class="icon">&#128268;</div><p>No .workflow/registry.json found.<br>Run <code>/autodev "request"</code> to start.</p></div>`;
+    return;
+  }
+
+  const { registry, workflows } = data;
+  const totalTasks = workflows.reduce((s, w) => s + (w.state?.tasks?.length || 0), 0);
+  const completedTasks = workflows.reduce((s, w) => s + (w.state?.tasks?.filter(t => t.status === 'completed').length || 0), 0);
+  const runningWf = workflows.filter(w => w.status === 'running').length;
+  const totalTokens = workflows.reduce((s, w) => {
+    const budget = w.state?.workflow_budget || w.state?.budget;
+    return s + (budget?.tokens_used || 0);
+  }, 0);
+  const totalRequests = workflows.reduce((s, w) => {
+    if (!w.state?.tasks) return s;
+    return s + w.state.tasks.reduce((ts, t) => {
+      return ts + (t.budget?.dispatches || []).reduce((ds, d) => ds + (d.request_count || 1), 0);
+    }, 0);
+  }, 0);
+
+  let html = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="label">Workflows</div><div class="value accent">${workflows.length}</div></div>
+      <div class="stat-card"><div class="label">Running</div><div class="value ${runningWf > 0 ? 'green' : ''}">${runningWf}</div></div>
+      <div class="stat-card"><div class="label">Tasks</div><div class="value">${completedTasks}/${totalTasks}</div></div>
+      <div class="stat-card"><div class="label">Tokens</div><div class="value token-fmt">${fmtNum(totalTokens)}</div></div>
+      <div class="stat-card"><div class="label">Requests</div><div class="value token-fmt">${fmtNum(totalRequests)}</div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Workflows</div>
+  `;
+
+  if (workflows.length === 0) {
+    html += `<div class="empty-state"><p>No workflows yet.</p></div>`;
+  }
+
+  for (const wf of workflows) {
+    const wfId = wf.wf_id || wf.workflow_id || '?';
+    const state = wf.state || {};
+    const tasks = state.tasks || [];
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    const pct = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+    const wfBudget = state.workflow_budget || state.budget || {};
+
+    html += `
+      <div class="workflow-card" onclick="this.classList.toggle('expanded')">
+        <div class="workflow-header">
+          <div>
+            <span class="workflow-id">${wfId}</span>
+            <span class="workflow-request">${wf.request_summary || wf.original_request || ''}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:var(--text2)">${completed}/${tasks.length}</span>
+            <span class="badge ${wf.status}">${wf.status}</span>
+          </div>
+        </div>
+        <div class="workflow-body">
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+    `;
+
+    // Budget bar
+    if (wfBudget.tokens_used != null) {
+      const bp = budgetPct(wfBudget.tokens_used, wfBudget.tokens_limit);
+      const cls = bp == null ? 'ok' : bp >= 100 ? 'exceeded' : bp >= 80 ? 'warn' : 'ok';
+      html += `
+        <div style="margin-top:12px;font-size:11px;color:var(--text2)">
+          Budget: ${fmtNum(wfBudget.tokens_used)} ${wfBudget.tokens_limit ? '/ ' + fmtNum(wfBudget.tokens_limit) : '(unlimited)'} tokens
+        </div>
+        ${wfBudget.tokens_limit ? `<div class="budget-bar"><div class="bar"><div class="fill ${cls}" style="width:${bp}%"></div></div><div class="pct">${bp}%</div></div>` : ''}
+      `;
+    }
+
+    // Task table
+    if (tasks.length > 0) {
+      html += `
+        <table class="task-table">
+          <thead><tr>
+            <th>Task</th><th>Status</th><th>Loops</th><th>Tokens</th><th>Branch</th>
+          </tr></thead>
+          <tbody>
+      `;
+      for (const t of tasks) {
+        const tokens = t.budget?.tokens_used || 0;
+        html += `
+          <tr>
+            <td><strong>${t.slug || t.task_id}</strong><br><span style="color:var(--text2);font-size:11px">${t.title || ''}</span></td>
+            <td><span class="phase-badge ${phaseClass(t.status)}">${t.status}</span></td>
+            <td>${t.phase_loop_count || 0}</td>
+            <td class="token-fmt">${fmtNum(tokens)}</td>
+            <td style="color:var(--text2);font-size:11px">${t.branch || '—'}</td>
+          </tr>
+        `;
+      }
+      html += `</tbody></table>`;
+    }
+
+    // Reflect summary
+    if (state.reflect && state.reflect.total_tasks > 0) {
+      const r = state.reflect;
+      html += `
+        <div style="margin-top:12px;padding:12px;background:var(--bg3);border-radius:6px;font-size:11px">
+          <strong>Reflect Summary</strong><br>
+          Duration: ${fmtDuration(r.total_duration_ms)} &nbsp;|&nbsp;
+          Tasks: ${r.completed_tasks}/${r.total_tasks} &nbsp;|&nbsp;
+          Reviews: ${r.total_review_loops} loops &nbsp;|&nbsp;
+          Requests: ${fmtNum(r.total_requests || 0)}
+          ${r.total_estimated_cost_usd != null ? ` &nbsp;|&nbsp; Cost: ~$${r.total_estimated_cost_usd.toFixed(2)}` : ''}
+        </div>
+      `;
+    }
+
+    html += `</div></div>`;
+  }
+
+  html += `</div>`;
+  app.innerHTML = html;
+  app.classList.add('refresh-flash');
+  setTimeout(() => app.classList.remove('refresh-flash'), 300);
+}
+
+// Fetch data
+async function fetchData() {
+  try {
+    const res = await fetch(`${API}/api/data`);
+    data = await res.json();
+    render();
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('Fetch error:', e);
+  }
+}
+
+// SSE
+function connectSSE() {
+  const dot = document.getElementById('conn-dot');
+  const text = document.getElementById('conn-text');
+  const es = new EventSource(`${API}/api/events`);
+
+  es.onopen = () => {
+    dot.className = 'status-dot connected';
+    text.textContent = 'live';
+  };
+  es.onmessage = (e) => {
+    if (e.data === 'refresh') fetchData();
+  };
+  es.onerror = () => {
+    dot.className = 'status-dot disconnected';
+    text.textContent = 'disconnected';
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+// Init
+fetchData();
+connectSSE();
+// Fallback poll every 5s
+setInterval(fetchData, 5000);
+</script>
+</body>
+</html>
