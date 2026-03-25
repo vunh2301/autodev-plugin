@@ -103,6 +103,57 @@ function stripCacheControl(obj) {
   return result
 }
 
+// ---------------------------------------------------------------------------
+// Skill directive rewriting (from aiproxy clients/claude-cli.ts)
+// Non-Claude models follow "You must run" literally → rewrite to optional
+// ---------------------------------------------------------------------------
+const MANDATORY_SKILL_RE = /You must run the Skill\(([^)]*)\) tool\./g
+const SKILL_INJECTION_COMMENT_RE = /<!--\s*skillInjection:.*?-->/gs
+
+function rewriteSkillDirectives(text) {
+  return text
+    .replace(MANDATORY_SKILL_RE, (_match, skillName) =>
+      `The skill "${skillName}" is available if relevant to the current task.`)
+    .replace(SKILL_INJECTION_COMMENT_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+}
+
+function rewriteSkillDirectivesInBody(body) {
+  if (!body || typeof body !== 'object') return body
+  const result = { ...body }
+
+  // Rewrite in system prompt
+  if (typeof result.system === 'string') {
+    result.system = rewriteSkillDirectives(result.system)
+  } else if (Array.isArray(result.system)) {
+    result.system = result.system.map(p =>
+      p.type === 'text' && typeof p.text === 'string'
+        ? { ...p, text: rewriteSkillDirectives(p.text) }
+        : p)
+  }
+
+  // Rewrite in messages
+  if (Array.isArray(result.messages)) {
+    result.messages = result.messages.map(msg => {
+      if (typeof msg.content === 'string') {
+        return { ...msg, content: rewriteSkillDirectives(msg.content) }
+      }
+      if (Array.isArray(msg.content)) {
+        return {
+          ...msg,
+          content: msg.content.map(part =>
+            part.type === 'text' && typeof part.text === 'string'
+              ? { ...part, text: rewriteSkillDirectives(part.text) }
+              : part),
+        }
+      }
+      return msg
+    })
+  }
+
+  return result
+}
+
 function safeParse(str, fallback = {}) {
   try { return JSON.parse(str) } catch { return fallback }
 }
@@ -588,8 +639,11 @@ async function handleRequest(req, res) {
     return
   }
 
+  // Rewrite skill directives before translation (from aiproxy claude-cli adapter)
+  const rewrittenBody = rewriteSkillDirectivesInBody(body)
+
   // Translate: Anthropic → Hub (Responses API format)
-  const hubRequest = anthropicToHub(body)
+  const hubRequest = anthropicToHub(rewrittenBody)
 
   // Prepare body for Codex endpoint
   const codexBody = prepareCodexBody(hubRequest)
