@@ -656,7 +656,18 @@ async function handleRequest(req, res) {
   const requestModel = body.model || 'claude-sonnet-4'
   const mappedModel = MODEL_MAP[requestModel] || TARGET_MODEL
 
-  log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length}`)
+  log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length} | msgs=${(body.messages || []).length}`)
+
+  // Debug: dump request to file for analysis
+  if (LOG_LEVEL === 'debug') {
+    const fs = await import('node:fs')
+    const debugDir = '.workflow/proxy-debug'
+    fs.mkdirSync(debugDir, { recursive: true })
+    const ts = Date.now()
+    fs.writeFileSync(`${debugDir}/${ts}-req-anthropic.json`, JSON.stringify(body, null, 2))
+    fs.writeFileSync(`${debugDir}/${ts}-req-hub.json`, JSON.stringify(anthropicToHub(rewrittenBody), null, 2))
+    fs.writeFileSync(`${debugDir}/${ts}-req-codex.json`, JSON.stringify(prepareCodexBody(anthropicToHub(rewrittenBody)), null, 2))
+  }
 
   // Get token
   let token
