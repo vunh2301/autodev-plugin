@@ -180,7 +180,6 @@ async function main() {
     env: {
       ...process.env,
       ANTHROPIC_BASE_URL: PROXY_URL,
-      ANTHROPIC_API_KEY: 'proxy',
       CLAUDE_CODE_DISABLE_1M_CONTEXT: '1',
       AUTODEV_PROVIDER: 'codex',
     },
