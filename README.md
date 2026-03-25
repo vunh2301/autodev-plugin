@@ -1,16 +1,20 @@
 # Autodev — Automated Development Workflow Plugin
 
-A Claude Code plugin that orchestrates the full development pipeline: **spec → plan → implement → PR → review → done**.
+A Claude Code plugin that orchestrates the full development pipeline: **brainstorm → spec+plan → implement → PR → review → done**.
 
 ## Features
 
+- **Brainstorm phase** (v2.3) — explores codebase before writing specs, clarifies ambiguous requests
+- **Smart merge** (v2.3) — small tasks (≤2 files) merge spec+plan into one phase, large tasks keep them separate
 - **Multi-task parallel execution** — split requirements into independent tasks, run them concurrently on separate branches
 - **Review loops** — automatic write → review → revise cycles with configurable max iterations
 - **Cross-model review** (v2.1) — writer uses one LLM, reviewer uses another for higher-quality feedback
-- **Budget tracking** (v2.1) — token usage monitoring per task/workflow with pause-on-exceed
+- **Cross-workflow communication** (v2.3) — multiple workflows can coordinate via SendMessage and shared artifacts
+- **Budget tracking** (v2.1) — token/request usage monitoring per task/phase/model with cost estimates
 - **Incremental cache** (v2.1) — cache specs and plans to skip redundant work
 - **Multi-workflow** — run multiple workflows simultaneously with resource limits
-- **Checkpoint & resume** — pause/resume at any point, survives session restarts
+- **Checkpoint & resume** — pause/resume at any point, survives session restarts and context compaction
+- **OAuth cross-model dispatch** — login to OpenAI for GPT review without API keys
 
 ## Quick Start
 
@@ -111,27 +115,34 @@ cross_model:
 
 ### Budget Limits
 
-Set token budgets to control costs:
+Set token budgets and pricing for cost estimates:
 
 ```yaml
 budget:
   task_budget_tokens: 50000
   workflow_budget_tokens: 200000
   warn_at_pct: 80
+  # pricing:  # USD per 1M tokens — enables cost estimates in summary
+  #   claude-opus-4:    { prompt: 15.00, completion: 75.00 }
+  #   gpt-4o:           { prompt: 2.50,  completion: 10.00 }
 ```
 
-## Pipeline Phases
+## Pipeline
 
 ```
-┌──────┐    ┌──────┐    ┌──────┐    ┌─────────┐    ┌──────┐
-│ SPEC │───▶│ PLAN │───▶│ IMPL │───▶│ PR+PUSH │───▶│ DONE │
-└──┬───┘    └──┬───┘    └──┬───┘    └────┬────┘    └──────┘
-   │ ▲         │ ▲         │ ▲           │ ▲
-   ▼ │         ▼ │         ▼ │           ▼ │
-┌────────┐  ┌────────┐  ┌────────┐  ┌─────────┐
-│SPEC    │  │PLAN    │  │CODE    │  │PR       │
-│REVIEW  │  │REVIEW  │  │REVIEW  │  │REVIEW   │
-└────────┘  └────────┘  └────────┘  └─────────┘
+┌───────────┐    ┌──────────────┐    ┌──────┐    ┌─────────┐    ┌──────┐
+│ BRAINSTORM│───▶│ SPEC+PLAN(*) │───▶│ IMPL │───▶│ PR+PUSH │───▶│ DONE │
+└───────────┘    └──────┬───────┘    └──┬───┘    └────┬────┘    └──────┘
+                        │ ▲              │ ▲           │ ▲
+                        ▼ │              ▼ │           ▼ │
+                    ┌────────┐       ┌────────┐   ┌─────────┐
+                    │SPEC/   │       │CODE    │   │PR       │
+                    │PLAN    │       │REVIEW  │   │REVIEW   │
+                    │REVIEW  │       └────────┘   └─────────┘
+                    └────────┘
+
+(*) Smart Merge: task ≤2 files → spec+plan merged into 1 phase
+                 task ≥3 files → spec then plan separately
 ```
 
 Each phase has a configurable review loop (default max: 3 iterations).
@@ -143,6 +154,7 @@ Each phase has a configurable review loop (default max: 3 iterations).
 ├── registry.json             # Multi-workflow registry
 ├── reactions.yaml            # Project config
 ├── model-registry.json       # Available LLM models
+├── shared/                   # Cross-workflow signals & artifacts
 ├── cache/                    # Spec/plan cache (v2.1)
 └── wf_YYYYMMDD_HHMMSS/      # Per-workflow state
     ├── state.json

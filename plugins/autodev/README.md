@@ -2,7 +2,7 @@
 
 Automated development workflow orchestrator for Claude Code.
 
-**Pipeline:** spec → plan → implement → PR → review → done
+**Pipeline:** brainstorm → spec+plan → implement → PR → review → done
 
 ## Commands
 
@@ -17,6 +17,13 @@ Automated development workflow orchestrator for Claude Code.
 | `/autodev-auth codex login` | Login to OpenAI |
 | `/autodev-auth codex status` | Show token status |
 | `/autodev-auth codex accounts` | List accounts |
+
+## Key Features (v2.3)
+
+- **Brainstorm** — explores codebase before spec, clarifies ambiguous requests
+- **Smart merge** — small tasks merge spec+plan, large tasks keep them separate
+- **Cross-workflow** — multiple workflows coordinate via SendMessage and shared artifacts
+- **Compact resilience** — survives Claude Code context compaction
 
 ## Authentication
 
