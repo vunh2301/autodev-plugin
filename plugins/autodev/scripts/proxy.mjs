@@ -634,8 +634,29 @@ async function handleRequest(req, res) {
     if (!upstream.ok) {
       const errText = await upstream.text()
       log('info', `Codex error: ${upstream.status} ${errText.slice(0, 300)}`)
+
+      // Detect specific error types for clear messaging
+      let errorType = 'api_error'
+      let errorMsg = errText.slice(0, 500)
+
+      if (upstream.status === 429) {
+        errorType = 'rate_limit_error'
+        errorMsg = '[codex] Rate limited. Codex usage quota exceeded — wait or upgrade plan.'
+        log('info', 'RATE LIMITED — Codex quota exceeded')
+      } else if (upstream.status === 402 || errText.includes('quota') || errText.includes('billing') || errText.includes('insufficient_quota')) {
+        errorType = 'rate_limit_error'
+        errorMsg = '[codex] Token quota exhausted. Check your OpenAI Codex plan usage.'
+        log('info', 'QUOTA EXHAUSTED')
+      } else if (upstream.status === 403 && errText.includes('scope')) {
+        errorType = 'authentication_error'
+        errorMsg = '[codex] OAuth scope insufficient. Run: autodev-codex auth login'
+        log('info', 'SCOPE ERROR')
+      } else if (upstream.status >= 500) {
+        errorMsg = `[codex] Server error (${upstream.status}). Codex API may be down.`
+      }
+
       res.writeHead(upstream.status >= 500 ? 500 : upstream.status, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: errText.slice(0, 500) } }))
+      res.end(JSON.stringify({ type: 'error', error: { type: errorType, message: errorMsg } }))
       return
     }
 

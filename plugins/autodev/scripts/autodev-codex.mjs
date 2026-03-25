@@ -193,6 +193,7 @@ async function main() {
       ...process.env,
       ANTHROPIC_BASE_URL: `http://localhost:${PORT}`,
       ANTHROPIC_API_KEY: 'proxy',
+      CLAUDE_CODE_DISABLE_1M_CONTEXT: '1',
       AUTODEV_PROVIDER: 'codex',
       AUTODEV_CODEX_MODEL: MODEL,
       AUTODEV_CODEX_EXEC_MODEL: EXEC_MODEL,
