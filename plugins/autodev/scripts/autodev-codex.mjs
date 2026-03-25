@@ -187,7 +187,12 @@ async function main() {
 
   console.log('Proxy ready. Launching Claude Code...\n')
 
-  const claude = spawn('claude', claudeArgs, {
+  const allClaudeArgs = [
+    '--system-prompt', `[CODEX MODE] You are running on OpenAI Codex (${EXEC_MODEL} for code, ${MODEL} for general) via autodev-codex proxy. All your API calls go through localhost:${PORT} → chatgpt.com/backend-api/codex/responses. Mention this when asked what model you are.`,
+    ...claudeArgs,
+  ]
+
+  const claude = spawn('claude', allClaudeArgs, {
     stdio: 'inherit',
     env: {
       ...process.env,
