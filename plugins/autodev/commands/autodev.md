@@ -697,6 +697,41 @@ Brainstorm phase chạy BỞI ORCHESTRATOR (không spawn teammate). Orchestrator
 
 **Thời gian:** Brainstorm nên < 2 phút. Nếu codebase quá lớn → giới hạn explore 10 files.
 
+### 8.0.2 External Skill Integration (v2.7)
+
+Trong brainstorm phase, orchestrator KIỂM TRA available skills (hiện trong system prompt)
+và invoke nếu task phù hợp. Mục đích: tận dụng plugin của user để nâng chất lượng output.
+
+```
+Skill Detection (trong brainstorm):
+
+1. DETECT task type từ request keywords:
+   - UI/UX: "page", "dashboard", "component", "design", "layout", "form"
+   - Frontend: "React", "Next.js", "Vue", "Svelte", "CSS", "Tailwind"
+   - API/Backend: "endpoint", "API", "database", "auth"
+   - DevOps: "deploy", "CI", "pipeline"
+
+2. CHECK available skills (visible trong system prompt):
+   - UI/UX task + "ui-ux-pro-max" available → Skill("ui-ux-pro-max", "plan {task_summary}")
+   - Frontend task + "frontend-design" available → Skill("frontend-design", "design {task_summary}")
+   - Có "shadcn" available + UI task → Skill("shadcn")
+   - Có "tui-designer" available + terminal UI task → Skill("tui-designer")
+
+3. INJECT skill output vào brainstorm context:
+   - Design recommendations → truyền vào spec context
+   - Color/typography choices → truyền vào implement context
+   - Component suggestions → truyền vào plan context
+
+4. Nếu skill KHÔNG available → skip, KHÔNG fail, KHÔNG suggest install
+```
+
+Quy tắc:
+- KHÔNG hardcode skill names — detect từ available skills list trong system prompt
+- Chỉ invoke trong brainstorm (trước spec) hoặc review phase (sau implement)
+- Output của skill → inject vào spec/plan/implement context tùy loại
+- Tối đa 2 external skills per brainstorm — tránh context bloat
+- Nếu skill timeout hoặc error → skip, log warning, tiếp tục pipeline
+
 ### 8.0.1 smart-merge spec+plan (v2.3)
 
 Khi `brainstorm.smart_merge = true` (task ≤2 files), author viết **1 file gộp** thay vì spec rồi plan:
