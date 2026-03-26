@@ -185,6 +185,7 @@ Groups chạy TUẦN TỰ. Tasks TRONG group chạy SONG SONG.
 | 1. Spec | `spec_writing` → `spec_review` | `author` → `reviewer` | `{specs_dir}/*.md` + review files | 3 |
 | 1b. Plan | `plan_writing` → `plan_review` | `author` → `reviewer` | `{plans_dir}/*.md` + review files | 3 |
 | 2. Implement | `implementing` → `code_review` | `author` → `reviewer` | Code trên feature branch + review files | 3 |
+| 2b. UI/UX | `ui_ux_review` | orchestrator (skill + browser) | Visual + code quality review | 1 |
 | 3. PR | `pr_created` → `pr_review` | orchestrator → `reviewer` | GitHub PR + reviews | 5 |
 | 4. Done | `completed` | orchestrator | Summary comment | — |
 
@@ -215,8 +216,11 @@ spec_plan_review → implementing           (reviewer trả "approved")
 spec_plan_review → failed                 (loop >= max)
 implementing → code_review                (implementer hoàn thành + tests pass)
 code_review → implementing                (reviewer trả REQUEST_CHANGES, loop < max)
-code_review → pr_created                  (reviewer trả APPROVE)
+code_review → ui_ux_review                (reviewer trả APPROVE + task có UI files)
+code_review → pr_created                  (reviewer trả APPROVE + task KHÔNG có UI files)
 code_review → failed                      (loop >= max_code_review_loops)
+ui_ux_review → implementing              (visual/UX issues found → author fix)
+ui_ux_review → pr_created                (no issues hoặc issues nhỏ đã fix inline)
 pr_created → pr_review                    (PR đã tạo, bắt đầu poll)
 pr_review → implementing                  (có comment mới cần fix)
 pr_review → completed                     (không có comment mới trong 30 phút)
@@ -1399,6 +1403,110 @@ Moi vong review = 2 dispatches (writer + reviewer). Budget check sau MOI dispatc
   "max_gh_api_retries": 3,
   "pr_poll_interval_sec": 60,
   "pr_poll_no_activity_timeout_min": 30
+}
+```
+
+### 10.4 UI/UX Hybrid Review (v2.7)
+
+Sau code_review APPROVE, nếu task có UI files → chạy UI/UX review trước PR.
+Nếu task KHÔNG có UI files → skip, đi thẳng pr_created.
+
+**Detect UI files:**
+```
+UI file patterns:
+  *.tsx, *.jsx, *.vue, *.svelte         — component files
+  *.css, *.scss, *.less, *.module.css   — style files
+  *.html                                — template files
+  tailwind.config.*, postcss.config.*   — design system config
+
+Kiểm tra: task.artifacts.changed_files có match bất kỳ pattern nào?
+  ├── CÓ → chuyển sang ui_ux_review
+  └── KHÔNG → skip, đi thẳng pr_created
+```
+
+**UI/UX Review Flow — 3 layers:**
+
+```
+code_review APPROVED + có UI files
+    ↓
+╔══════════════════════════════════════════════════════════════╗
+║  LAYER 1: Skill-based Code Review (luôn chạy)              ║
+║                                                              ║
+║  Check available skills:                                     ║
+║  ├── "ui-ux-pro-max" available?                              ║
+║  │     → Skill("ui-ux-pro-max", "review {changed_files}")   ║
+║  │     → Nhận: a11y issues, color contrast, spacing, layout ║
+║  ├── "react-best-practices" available?                       ║
+║  │     → Skill("react-best-practices")                       ║
+║  │     → Nhận: component structure, hooks, performance       ║
+║  └── Không có skill nào?                                     ║
+║        → Orchestrator tự review code patterns:               ║
+║          - Semantic HTML (h1-h6, nav, main, section)         ║
+║          - ARIA labels trên interactive elements             ║
+║          - Responsive patterns (media queries, flex, grid)   ║
+║          - Color contrast (hardcoded colors check)           ║
+║          - Loading/error/empty states                        ║
+╚══════════════════════════════════════════════════════════════╝
+    ↓
+╔══════════════════════════════════════════════════════════════╗
+║  LAYER 2: Visual Review via Browser (nếu có playwright)     ║
+║                                                              ║
+║  Check: "playwright" plugin available?                       ║
+║  ├── CÓ →                                                    ║
+║  │   1. Start dev server: Bash("{test_command_dev}")          ║
+║  │      - Detect: package.json → "dev" script                ║
+║  │      - Fallback: "npm run dev" / "npx vite"               ║
+║  │   2. Wait for server ready (poll localhost, max 30s)       ║
+║  │   3. browser_navigate → localhost:{port}                   ║
+║  │   4. browser_take_screenshot → capture full page           ║
+║  │   5. browser_resize(width: 375) → mobile screenshot       ║
+║  │   6. browser_resize(width: 768) → tablet screenshot       ║
+║  │   7. browser_snapshot → get accessibility tree             ║
+║  │   8. browser_console_messages → check for errors           ║
+║  │   9. Evaluate screenshots + a11y tree:                     ║
+║  │      - Layout alignment / spacing consistency              ║
+║  │      - Text readability / contrast                         ║
+║  │      - Mobile responsive behavior                          ║
+║  │      - Visual hierarchy                                    ║
+║  │      - Console errors / warnings                           ║
+║  │  10. Kill dev server                                       ║
+║  │                                                            ║
+║  └── KHÔNG → Skip layer 2, proceed with layer 1 results only ║
+╚══════════════════════════════════════════════════════════════╝
+    ↓
+╔══════════════════════════════════════════════════════════════╗
+║  LAYER 3: Verdict                                            ║
+║                                                              ║
+║  Combine results from Layer 1 + Layer 2:                     ║
+║                                                              ║
+║  Issues classified:                                          ║
+║  ├── CRITICAL: broken layout, missing a11y, console errors   ║
+║  │     → status: implementing (author fix required)          ║
+║  ├── MODERATE: spacing inconsistent, missing states          ║
+║  │     → author fix inline (orchestrator SendMessage)        ║
+║  │     → sau fix → pr_created                                ║
+║  └── MINOR: style suggestions, nice-to-have                 ║
+║        → log as comments in PR, proceed → pr_created         ║
+║                                                              ║
+║  Output: {docs_dir}/reviews/{wf_id}/{task_id}/               ║
+║          ui-ux-review-v1.md                                  ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+**Quy tắc:**
+- UI/UX review chạy bởi ORCHESTRATOR (không spawn teammate)
+- Max 1 loop — nếu CRITICAL issues, author fix rồi chạy lại 1 lần
+- Nếu skill + browser đều không available → skip toàn bộ, đi thẳng pr_created
+- Dev server timeout 30s — nếu không start được → skip Layer 2, chỉ dùng Layer 1
+- Screenshot chỉ capture main page (route "/") — không navigate toàn app
+- Khi combined issues = 0 → log "UI/UX review: PASSED" → pr_created
+
+**Giới hạn:**
+```jsonc
+{
+  "max_ui_ux_review_loops": 1,
+  "dev_server_timeout_sec": 30,
+  "screenshot_viewports": [375, 768, 1280]
 }
 ```
 
