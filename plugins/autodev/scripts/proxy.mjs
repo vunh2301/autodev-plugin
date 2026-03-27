@@ -26,18 +26,10 @@ const PORT = parseInt(getArg('--port', '4141'))
 const TARGET_MODEL = getArg('--target-model', 'gpt-5.4')
 const EXEC_MODEL = getArg('--exec-model', 'gpt-5.3-codex')
 const ACCOUNT = getArg('--account', 'default')
+const CODEX_API_URL = getArg('--target-url', 'https://chatgpt.com/backend-api/codex/responses')
 const LOG_LEVEL = getArg('--log', 'info')
 
-// Provider mode: "codex" (OAuth + Responses API) or "openai-compat" (API key + Chat Completions)
-const PROVIDER_MODE = getArg('--provider', 'codex')
-const TARGET_URL = getArg('--target-url',
-  PROVIDER_MODE === 'codex'
-    ? 'https://chatgpt.com/backend-api/codex/responses'
-    : 'https://api.openai.com/v1/chat/completions'
-)
-const API_KEY = getArg('--api-key', process.env.OPENAI_API_KEY || '')
-
-// Model mapping: Claude model → target model
+// Model mapping: Claude model → Codex model
 const MODEL_MAP = {
   'claude-opus-4': EXEC_MODEL,
   'claude-opus-4-6': EXEC_MODEL,
@@ -1830,19 +1822,6 @@ async function handleRequest(req, res) {
     return
   }
 
-  // Health check endpoint
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({
-      status: 'ok',
-      provider: PROVIDER_MODE,
-      target_url: TARGET_URL,
-      target_model: TARGET_MODEL,
-      port: PORT,
-    }))
-    return
-  }
-
   if (req.method !== 'POST' || !req.url.includes('/v1/messages')) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not found. Use POST /v1/messages' }))
@@ -1875,88 +1854,22 @@ async function handleRequest(req, res) {
   const requestModel = body.model || 'claude-sonnet-4'
   const mappedModel = MODEL_MAP[requestModel] || TARGET_MODEL
 
-  log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length} | msgs=${(body.messages || []).length} | provider=${PROVIDER_MODE}`)
+  log('info', `${requestModel} → ${mappedModel} | tools=${(body.tools || []).length} | msgs=${(body.messages || []).length}`)
 
-  // --- Resolve auth token ---
   let token
-  if (PROVIDER_MODE === 'openai-compat') {
-    // API key mode: from --api-key or env
-    token = API_KEY || process.env.OPENAI_API_KEY
-    if (!token) {
-      res.writeHead(401, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'No API key. Set --api-key or OPENAI_API_KEY env var.' } }))
-      return
-    }
-  } else {
-    // Codex OAuth mode
-    try { token = getToken() } catch (err) {
-      res.writeHead(401, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: err.message } }))
-      return
-    }
+  try { token = getToken() } catch (err) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: err.message } }))
+    return
   }
 
   // Rewrite skill directives before translation
   const rewrittenBody = rewriteSkillDirectivesInBody(body)
 
-  // --- Determine if model needs GPT translate pipeline ---
-  const needsTranslate = mappedModel.startsWith('gpt') || mappedModel.startsWith('o1') || mappedModel.startsWith('o3') || mappedModel.startsWith('o4')
-
-  if (PROVIDER_MODE === 'openai-compat' && !needsTranslate) {
-    // ====== DIRECT MODE: non-GPT model, Anthropic-compatible endpoint ======
-    // Forward as-is (Anthropic format) to the target URL
-    const directBody = { ...rewrittenBody, model: mappedModel, stream: true }
-    const directHeaders = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'x-api-key': token,
-      'anthropic-version': '2023-06-01',
-    }
-
-    log('debug', `→ DIRECT ${TARGET_URL} model=${mappedModel}`)
-
-    try {
-      const upstream = await fetch(TARGET_URL, {
-        method: 'POST', headers: directHeaders, body: JSON.stringify(directBody),
-      })
-
-      if (!upstream.ok) {
-        const errText = await upstream.text()
-        log('info', `Direct error: ${upstream.status} ${errText.slice(0, 300)}`)
-        res.writeHead(upstream.status >= 500 ? 500 : upstream.status, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: errText.slice(0, 500) } }))
-        return
-      }
-
-      // Pass through SSE as-is (already Anthropic format)
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      })
-      const reader = upstream.body.getReader()
-      const decoder = new TextDecoder()
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) { res.end(); return }
-          res.write(decoder.decode(value, { stream: true }))
-        }
-      }
-      await pump()
-    } catch (err) {
-      log('info', `Direct fetch error: ${err.message}`)
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: err.message } }))
-      }
-    }
-    return
-  }
-
-  // ====== TRANSLATE MODE: GPT model or Codex provider ======
   // Translate: Anthropic → Hub (Responses API format)
   const hubRequest = anthropicToHub(rewrittenBody)
+
+  // Override model with mapped model
   hubRequest.model = mappedModel
 
   if (LOG_LEVEL === 'debug') {
@@ -1966,55 +1879,39 @@ async function handleRequest(req, res) {
     const ts = Date.now()
     writeFileSync(`${debugDir}/${ts}-req-anthropic.json`, JSON.stringify(body, null, 2))
     writeFileSync(`${debugDir}/${ts}-req-hub.json`, JSON.stringify(hubRequest, null, 2))
+    writeFileSync(`${debugDir}/${ts}-req-codex.json`, JSON.stringify(prepareCodexBody(hubRequest), null, 2))
   }
 
-  // Determine upstream format and URL
-  let upstreamUrl, upstreamBody, upstreamHeaders, streamFormat
+  // Prepare body for Codex endpoint (from providers/codex.ts prepareBody)
+  const codexBody = prepareCodexBody(hubRequest)
 
-  if (PROVIDER_MODE === 'codex') {
-    // Codex Responses API
-    upstreamUrl = TARGET_URL
-    upstreamBody = prepareCodexBody(hubRequest)
-    upstreamHeaders = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-      'Originator': 'codex_cli_rs',
-    }
-    const accountId = extractAccountId(token)
-    if (accountId) upstreamHeaders['Chatgpt-Account-Id'] = accountId
-    streamFormat = 'openai-responses'
-  } else {
-    // openai-compat: use Responses API format (same as Codex, proven translator)
-    // Replace endpoint suffix to use /v1/responses
-    const baseUrl = TARGET_URL.replace(/\/v1\/(chat\/completions|messages)$/, '')
-    upstreamUrl = `${baseUrl}/v1/responses`
-    upstreamBody = prepareCodexBody(hubRequest)
-    upstreamHeaders = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    }
-    streamFormat = 'openai-responses'
+  // Build headers (from providers/codex.ts buildHeaders)
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'Originator': 'codex_cli_rs',
   }
+  const accountId = extractAccountId(token)
+  if (accountId) headers['Chatgpt-Account-Id'] = accountId
 
-  log('debug', `→ ${upstreamUrl} model=${upstreamBody.model} format=${streamFormat}`)
+  log('debug', `→ ${CODEX_API_URL} model=${codexBody.model}`)
 
   try {
-    let upstream = await fetch(upstreamUrl, {
-      method: 'POST', headers: upstreamHeaders, body: JSON.stringify(upstreamBody),
+    let upstream = await fetch(CODEX_API_URL, {
+      method: 'POST', headers, body: JSON.stringify(codexBody),
     })
 
-    // 401 retry (Codex OAuth only)
-    if (upstream.status === 401 && PROVIDER_MODE === 'codex') {
+    // 401 retry with fresh token
+    if (upstream.status === 401) {
       log('info', '401 — refreshing token')
       cachedToken = null
       try {
         const freshToken = getToken()
-        upstreamHeaders['Authorization'] = `Bearer ${freshToken}`
+        headers['Authorization'] = `Bearer ${freshToken}`
         const freshAccountId = extractAccountId(freshToken)
-        if (freshAccountId) upstreamHeaders['Chatgpt-Account-Id'] = freshAccountId
-        upstream = await fetch(upstreamUrl, { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(upstreamBody) })
+        if (freshAccountId) headers['Chatgpt-Account-Id'] = freshAccountId
+        upstream = await fetch(CODEX_API_URL, { method: 'POST', headers, body: JSON.stringify(codexBody) })
       } catch {
         res.writeHead(401, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'Token refresh failed' } }))
@@ -2024,18 +1921,21 @@ async function handleRequest(req, res) {
 
     if (!upstream.ok) {
       const errText = await upstream.text()
-      log('info', `Upstream error: ${upstream.status} ${errText.slice(0, 300)}`)
+      log('info', `Codex error: ${upstream.status} ${errText.slice(0, 300)}`)
 
       let errorType = 'api_error'
       let errorMsg = errText.slice(0, 500)
       if (upstream.status === 429) {
         errorType = 'rate_limit_error'
-        errorMsg = 'Rate limited — wait or check plan quota.'
-      } else if (upstream.status === 402 || errText.includes('quota') || errText.includes('billing')) {
+        errorMsg = '[codex] Rate limited. Codex usage quota exceeded — wait or upgrade plan.'
+      } else if (upstream.status === 402 || errText.includes('quota') || errText.includes('billing') || errText.includes('insufficient_quota')) {
         errorType = 'rate_limit_error'
-        errorMsg = 'Token quota exhausted.'
+        errorMsg = '[codex] Token quota exhausted. Check your OpenAI Codex plan usage.'
+      } else if (upstream.status === 403 && errText.includes('scope')) {
+        errorType = 'authentication_error'
+        errorMsg = '[codex] OAuth scope insufficient. Run: autodev-codex auth login'
       } else if (upstream.status >= 500) {
-        errorMsg = `Server error (${upstream.status}). API may be down.`
+        errorMsg = `[codex] Server error (${upstream.status}). Codex API may be down.`
       }
 
       res.writeHead(upstream.status >= 500 ? 500 : upstream.status, { 'Content-Type': 'application/json' })
@@ -2043,14 +1943,16 @@ async function handleRequest(req, res) {
       return
     }
 
-    // Stream translate: upstream format → Anthropic SSE
+    // Stream translate: Responses API SSE → Claude SSE
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     })
 
-    const translator = createStreamTranslator(streamFormat, 'anthropic-messages')
+    // Use the full stream translator pipeline: openai-responses → anthropic-messages
+    const translator = createStreamTranslator('openai-responses', 'anthropic-messages')
+    // Configure ResponsesToClaudeStream specific features
     if (translator.setInputTokenEstimate) translator.setInputTokenEstimate(estimateInputTokens(body))
     if (translator.setLoadedSkills) translator.setLoadedSkills(extractLoadedSkills(body))
 
@@ -2126,13 +2028,18 @@ const server = createServer(handleRequest)
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`
-  Autodev Proxy — ${PROVIDER_MODE === 'codex' ? 'Codex' : 'OpenAI-Compat'} Mode
+  Autodev Proxy — Claude → Codex Translation (Full Pipeline)
   ─────────────────────────────────────────────────────────────
   Listening:    http://localhost:${PORT}
-  Provider:     ${PROVIDER_MODE}
-  Target:       ${TARGET_URL}
-  Model:        ${TARGET_MODEL}
-  Translators:  anthropic ↔ responses ↔ chat (all paths)
+  Target:       ${CODEX_API_URL}
+  Execute:      opus → ${EXEC_MODEL}
+  General:      * → ${TARGET_MODEL}
+  Account:      ${ACCOUNT}
+  Translators:  anthropic ↔ responses ↔ chat ↔ gemini (all paths)
+
+  Configure Claude Code:
+    export ANTHROPIC_BASE_URL=http://localhost:${PORT}
+    export ANTHROPIC_API_KEY=proxy
 
   Or just run: autodev-codex
   ─────────────────────────────────────────────────────────────
