@@ -1985,16 +1985,17 @@ async function handleRequest(req, res) {
     if (accountId) upstreamHeaders['Chatgpt-Account-Id'] = accountId
     streamFormat = 'openai-responses'
   } else {
-    // OpenAI Chat Completions (for GPT models on custom endpoints)
-    upstreamUrl = TARGET_URL
-    upstreamBody = hubToChat(hubRequest)
-    upstreamBody.model = mappedModel
-    upstreamBody.stream = true
+    // openai-compat: use Responses API format (same as Codex, proven translator)
+    // Replace endpoint suffix to use /v1/responses
+    const baseUrl = TARGET_URL.replace(/\/v1\/(chat\/completions|messages)$/, '')
+    upstreamUrl = `${baseUrl}/v1/responses`
+    upstreamBody = prepareCodexBody(hubRequest)
     upstreamHeaders = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
     }
-    streamFormat = 'openai-chat'
+    streamFormat = 'openai-responses'
   }
 
   log('debug', `→ ${upstreamUrl} model=${upstreamBody.model} format=${streamFormat}`)
