@@ -24,15 +24,15 @@ function getArg(name, fallback) {
 
 const PORT = parseInt(getArg('--port', '4141'))
 const TARGET_MODEL = getArg('--target-model', 'gpt-5.4')
-const EXEC_MODEL = getArg('--exec-model', 'gpt-5.3-codex')
+const EXEC_MODEL = getArg('--exec-model', TARGET_MODEL)
 const ACCOUNT = getArg('--account', 'default')
 const CODEX_API_URL = getArg('--target-url', 'https://chatgpt.com/backend-api/codex/responses')
 const LOG_LEVEL = getArg('--log', 'info')
 
-// Model mapping: Claude model → Codex model
+// Model mapping: Claude model → target model (all default to gpt-5.4)
 const MODEL_MAP = {
-  'claude-opus-4': EXEC_MODEL,
-  'claude-opus-4-6': EXEC_MODEL,
+  'claude-opus-4': TARGET_MODEL,
+  'claude-opus-4-6': TARGET_MODEL,
   'claude-sonnet-4': TARGET_MODEL,
   'claude-sonnet-4-5': TARGET_MODEL,
   'claude-sonnet-4-6': TARGET_MODEL,
