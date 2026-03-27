@@ -1,23 +1,49 @@
 #!/usr/bin/env node
-// autodev-ram — Launch Claude Code via ramclouds provider
+// autodev-ram — Launch Claude Code via any OpenAI-compatible provider
 //
 // Smart routing:
-//   model = gpt*  → proxy translate (Anthropic → OpenAI Chat Completions) → ramclouds
-//   model = other → direct passthrough (Anthropic format) → ramclouds
+//   model = gpt*  → proxy translate (Anthropic → OpenAI Chat Completions)
+//   model = other → direct passthrough (Anthropic format)
 //
 // Usage:
-//   autodev-ram                                    # start with default config
-//   autodev-ram --url https://api.ramclouds.com    # custom endpoint
-//   autodev-ram --api-key sk-xxx                   # API key (or set RAMCLOUDS_API_KEY)
-//   autodev-ram --model gpt-5.4                    # GPT model (goes through translate)
-//   autodev-ram --model claude-sonnet-4            # Claude model (goes direct)
-//   autodev-ram -- --plugin-dir ./my-plugin        # pass args to claude
+//   autodev-ram auth                              # setup API key + URL (saved)
+//   autodev-ram                                   # start (default: gpt-5.4)
+//   autodev-ram --model claude-opus-4             # use Claude model (direct)
+//   autodev-ram -- --plugin-dir ./my-plugin       # pass args to claude
 
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// ---------------------------------------------------------------------------
+// Config file: ~/.config/autodev/ram.json
+// ---------------------------------------------------------------------------
+const configDir = process.platform === 'win32'
+  ? resolve(process.env.APPDATA || '', 'autodev')
+  : resolve(process.env.HOME || '', '.config', 'autodev')
+const configPath = resolve(configDir, 'ram.json')
+
+function loadConfig() {
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch {
+    return {}
+  }
+}
+
+function saveConfig(cfg) {
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2))
+}
+
+function ask(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()) }))
+}
 
 // ---------------------------------------------------------------------------
 // Args
@@ -31,61 +57,72 @@ function getArg(name, fallback) {
 const firstArg = args[0]
 
 // ---------------------------------------------------------------------------
+// Subcommand: auth
+// ---------------------------------------------------------------------------
+if (firstArg === 'auth') {
+  const cfg = loadConfig()
+
+  console.log('\n  autodev-ram auth — Setup provider credentials\n')
+
+  if (cfg.url) console.log(`  Current URL:  ${cfg.url}`)
+  if (cfg.api_key) console.log(`  Current Key:  ${cfg.api_key.slice(0, 8)}...${cfg.api_key.slice(-4)}`)
+  if (cfg.model) console.log(`  Current Model: ${cfg.model}`)
+  console.log()
+
+  const url = await ask('  API URL (enter to keep current): ')
+  const key = await ask('  API Key (enter to keep current): ')
+  const model = await ask('  Default model [gpt-5.4] (enter to keep current): ')
+
+  if (url) cfg.url = url
+  if (key) cfg.api_key = key
+  if (model) cfg.model = model
+
+  saveConfig(cfg)
+  console.log(`\n  Saved to ${configPath}`)
+  console.log('  Run "autodev-ram" to start.\n')
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 if (firstArg === 'help' || firstArg === '--help' || firstArg === '-h') {
   console.log(`
-  autodev-ram — Claude Code powered by ramclouds
+  autodev-ram — Claude Code powered by any provider
+
+  Setup:
+    autodev-ram auth                   Setup API key + URL (one-time, saved)
 
   Usage:
-    autodev-ram                                    Start session
-    autodev-ram --url https://api.ramclouds.com    Custom endpoint
-    autodev-ram --api-key sk-xxx                   API key
-    autodev-ram --model gpt-5.4                    Use GPT (translate mode)
-    autodev-ram --model claude-sonnet-4            Use Claude (direct mode)
-    autodev-ram -- <claude args>                   Pass args to Claude Code
+    autodev-ram                        Start session (default: gpt-5.4)
+    autodev-ram --model claude-opus-4  Use specific model
+    autodev-ram -- <claude args>       Pass args to Claude Code
 
-  Environment variables:
-    RAMCLOUDS_API_KEY    API key (alternative to --api-key)
-    RAMCLOUDS_URL        Endpoint URL (alternative to --url)
+  Routing (automatic):
+    gpt* / o1* / o3* / o4*  → translate (Anthropic → OpenAI format)
+    anything else            → direct passthrough (Anthropic format)
 
-  Routing:
-    model starts with "gpt", "o1", "o3", "o4"
-      → Proxy translates Anthropic → OpenAI Chat Completions → ramclouds
-    model is anything else
-      → Proxy passes through Anthropic format directly → ramclouds
+  Config: ${configPath}
 `)
   process.exit(0)
 }
 
 // ---------------------------------------------------------------------------
-// Config
+// Resolve config: args > env > saved config
 // ---------------------------------------------------------------------------
+const cfg = loadConfig()
 const PROXY_PORT = getArg('--port', '4142')
 const PROXY_URL = `http://localhost:${PROXY_PORT}`
-const TARGET_URL = getArg('--url', process.env.RAMCLOUDS_URL || '')
-const API_KEY = getArg('--api-key', process.env.RAMCLOUDS_API_KEY || '')
-const TARGET_MODEL = getArg('--model', 'gpt-5.4')
+const TARGET_URL = getArg('--url', process.env.RAMCLOUDS_URL || cfg.url || '')
+const API_KEY = getArg('--api-key', process.env.RAMCLOUDS_API_KEY || cfg.api_key || '')
+const TARGET_MODEL = getArg('--model', cfg.model || 'gpt-5.4')
 const LOG_LEVEL = getArg('--log', 'info')
 
-if (!TARGET_URL) {
+if (!TARGET_URL || !API_KEY) {
   console.error(`
-  Error: No endpoint URL provided.
+  Not configured. Run first:
 
-  Set via:
-    autodev-ram --url https://api.ramclouds.com/v1/messages
-    or: export RAMCLOUDS_URL=https://api.ramclouds.com/v1/messages
-`)
-  process.exit(1)
-}
-
-if (!API_KEY) {
-  console.error(`
-  Error: No API key provided.
-
-  Set via:
-    autodev-ram --api-key sk-xxx
-    or: export RAMCLOUDS_API_KEY=sk-xxx
+    autodev-ram auth
 `)
   process.exit(1)
 }
@@ -161,18 +198,14 @@ async function main() {
   Proxy:     ${PROXY_URL}
   Endpoint:  ${TARGET_URL}
   Model:     ${TARGET_MODEL}
-  Mode:      ${mode} (${isGpt ? 'Anthropic→OpenAI translate' : 'Anthropic direct passthrough'})
+  Mode:      ${mode}
   ─────────────────────────────────
 `)
 
   console.log('Launching Claude Code...\n')
 
-  const systemPrompt = isGpt
-    ? `[RAMCLOUDS GPT MODE] Running on ramclouds provider. Model: ${TARGET_MODEL}. API calls translated: Anthropic → OpenAI Chat Completions → ${TARGET_URL}. Full tool access.`
-    : `[RAMCLOUDS DIRECT MODE] Running on ramclouds provider. Model: ${TARGET_MODEL}. API calls forwarded in Anthropic format to ${TARGET_URL}. Full tool access.`
-
   const claude = spawn('claude', [
-    '--system-prompt', systemPrompt,
+    '--system-prompt', `[RAM MODE] Provider: ramclouds | Model: ${TARGET_MODEL} | Mode: ${mode}. Full tool access.`,
     ...claudeArgs,
   ], {
     stdio: 'inherit',
