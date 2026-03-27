@@ -128,7 +128,7 @@ function startProxy() {
   }
 
   const child = spawn('node', [proxyScript, ...proxyArgs], {
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'inherit'],
     detached: false,
   })
 
