@@ -1830,6 +1830,19 @@ async function handleRequest(req, res) {
     return
   }
 
+  // Health check endpoint
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      status: 'ok',
+      provider: PROVIDER_MODE,
+      target_url: TARGET_URL,
+      target_model: TARGET_MODEL,
+      port: PORT,
+    }))
+    return
+  }
+
   if (req.method !== 'POST' || !req.url.includes('/v1/messages')) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not found. Use POST /v1/messages' }))
