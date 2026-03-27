@@ -1,14 +1,13 @@
 #!/usr/bin/env node
-// install-cli.mjs — Install global "autodev-codex" command
+// install-cli.mjs — Install global "autodev-codex" and "autodev-ram" commands
 // Usage: node install-cli.mjs
 
-import { writeFileSync, chmodSync, existsSync } from 'fs'
+import { writeFileSync, chmodSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { execSync } from 'child_process'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const scriptPath = resolve(__dirname, 'autodev-codex.mjs')
 
 // Find npm global bin dir
 let binDir
@@ -20,15 +19,29 @@ try {
     : '/usr/local/bin'
 }
 
-const binName = process.platform === 'win32' ? 'autodev-codex.cmd' : 'autodev-codex'
-const binPath = resolve(binDir, binName)
+const commands = [
+  { name: 'autodev-codex', script: 'autodev-codex.mjs' },
+  { name: 'autodev-ram', script: 'autodev-ram.mjs' },
+]
 
-if (process.platform === 'win32') {
-  writeFileSync(binPath, `@echo off\r\nnode "${scriptPath}" %*\r\n`)
-} else {
-  writeFileSync(binPath, `#!/bin/sh\nexec node "${scriptPath}" "$@"\n`)
-  chmodSync(binPath, 0o755)
+for (const cmd of commands) {
+  const scriptPath = resolve(__dirname, cmd.script)
+  const binName = process.platform === 'win32' ? `${cmd.name}.cmd` : cmd.name
+  const binPath = resolve(binDir, binName)
+
+  if (process.platform === 'win32') {
+    writeFileSync(binPath, `@echo off\r\nnode "${scriptPath}" %*\r\n`)
+  } else {
+    writeFileSync(binPath, `#!/bin/sh\nexec node "${scriptPath}" "$@"\n`)
+    chmodSync(binPath, 0o755)
+  }
+
+  console.log(`Installed: ${binPath}`)
 }
 
-console.log(`Installed: ${binPath}`)
-console.log(`\nUsage:\n  autodev-codex                    # full GPT session\n  autodev-codex --model gpt-5.4    # custom model\n`)
+console.log(`
+Usage:
+  autodev-codex                                    # GPT via Codex OAuth
+  autodev-ram --url URL --api-key KEY              # Any provider via API key
+  autodev-ram --url URL --api-key KEY --model X    # Smart routing (gpt* = translate, other = direct)
+`)
