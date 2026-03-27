@@ -120,6 +120,40 @@ claude plugin uninstall autodev
 claude plugin install autodev
 ```
 
+## Troubleshooting
+
+**`autodev-codex: command not found`**
+```bash
+# Mở Claude Code bình thường 1 lần (auto-install chạy khi startup)
+claude
+# Hoặc cài thủ công:
+node ~/.claude/plugins/cache/autodev-marketplace/autodev/*/scripts/install-cli.mjs
+```
+
+**Claude vẫn dùng Anthropic API thay vì proxy**
+```bash
+# Check proxy đang chạy:
+curl http://localhost:4141/health
+# → {"status":"ok","provider":"codex","target_model":"gpt-5.4",...}
+
+# Check env:
+echo $ANTHROPIC_BASE_URL
+# → http://localhost:4141  ✅ (đúng)
+# → (trống)                ❌ (chạy lại autodev-codex hoặc autodev-ram)
+```
+
+**Auth conflict warning**
+```bash
+# Nếu thấy: "Both a token (claude.ai) and an API key are set"
+claude /logout    # logout claude.ai trước
+autodev-codex     # rồi chạy lại
+```
+
+**RAM mode: "Not configured"**
+```bash
+autodev-ram auth  # setup URL + API key (lưu vĩnh viễn)
+```
+
 ## Requirements
 
 - Claude Code CLI
