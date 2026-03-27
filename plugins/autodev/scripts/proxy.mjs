@@ -2125,18 +2125,13 @@ const server = createServer(handleRequest)
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`
-  Autodev Proxy — Claude → Codex Translation (Full Pipeline)
+  Autodev Proxy — ${PROVIDER_MODE === 'codex' ? 'Codex' : 'OpenAI-Compat'} Mode
   ─────────────────────────────────────────────────────────────
   Listening:    http://localhost:${PORT}
-  Target:       ${CODEX_API_URL}
-  Execute:      opus → ${EXEC_MODEL}
-  General:      * → ${TARGET_MODEL}
-  Account:      ${ACCOUNT}
-  Translators:  anthropic ↔ responses ↔ chat ↔ gemini (all paths)
-
-  Configure Claude Code:
-    export ANTHROPIC_BASE_URL=http://localhost:${PORT}
-    export ANTHROPIC_API_KEY=proxy
+  Provider:     ${PROVIDER_MODE}
+  Target:       ${TARGET_URL}
+  Model:        ${TARGET_MODEL}
+  Translators:  anthropic ↔ responses ↔ chat (all paths)
 
   Or just run: autodev-codex
   ─────────────────────────────────────────────────────────────
